@@ -20,6 +20,7 @@ public class MouseShim {
     private static boolean initialized = false;
 
     private static double cursorX, cursorY;
+    private static double lastEventX, lastEventY;  // for per-event deltas (getEventDX/DY)
     private static double prevCursorX, prevCursorY;
     private static int deltaX, deltaY;
     private static int scrollDWheel;
@@ -46,8 +47,13 @@ public class MouseShim {
             public void invoke(long w, double xpos, double ypos) {
                 cursorX = xpos;
                 cursorY = ypos;
+                MouseEvent e = new MouseEvent(-1, false, (int) xpos, (int) ypos, 0);
+                e.dx = (int) (xpos - lastEventX);
+                e.dy = (int) (lastEventY - ypos);
+                lastEventX = xpos;
+                lastEventY = ypos;
                 synchronized (eventQueue) {
-                    eventQueue.add(new MouseEvent(-1, false, (int) xpos, (int) ypos, 0));
+                    eventQueue.add(e);
                 }
             }
         });
@@ -68,6 +74,8 @@ public class MouseShim {
         GLFW.glfwGetCursorPos(window, xArr, yArr);
         cursorX = xArr[0];
         cursorY = yArr[0];
+        lastEventX = cursorX;
+        lastEventY = cursorY;
         prevCursorX = cursorX;
         prevCursorY = cursorY;
     }
@@ -106,6 +114,18 @@ public class MouseShim {
 
     public static int getEventDWheel() {
         return currentEvent != null ? currentEvent.dwheel : 0;
+    }
+
+    public static int getEventDX() {
+        return currentEvent != null ? currentEvent.dx : 0;
+    }
+
+    public static int getEventDY() {
+        return currentEvent != null ? currentEvent.dy : 0;
+    }
+
+    public static long getEventNanoseconds() {
+        return currentEvent != null ? currentEvent.nanos : 0L;
     }
 
     /** Test/puppet hook: move the virtual cursor (GLFW window coords, top-left origin). */
@@ -183,6 +203,8 @@ public class MouseShim {
         final boolean pressed;
         final int x, y;
         final int dwheel;
+        final long nanos = System.nanoTime();
+        int dx, dy;
 
         MouseEvent(int button, boolean pressed, int x, int y, int dwheel) {
             this.button = button;

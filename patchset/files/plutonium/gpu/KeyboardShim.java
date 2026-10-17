@@ -265,7 +265,9 @@ public class KeyboardShim {
                     keyStates[lwjgl2Key] = pressed;
                 }
                 synchronized (eventQueue) {
-                    eventQueue.add(new KeyEvent(lwjgl2Key, pressed, (char) 0));
+                    KeyEvent e = new KeyEvent(lwjgl2Key, pressed, (char) 0);
+                    e.repeat = action == GLFW.GLFW_REPEAT;
+                    eventQueue.add(e);
                 }
             }
         });
@@ -345,7 +347,17 @@ public class KeyboardShim {
     }
 
     public static boolean isRepeatEvent() {
-        return false;
+        return currentEvent != null && currentEvent.repeat;
+    }
+
+    public static long getEventNanoseconds() {
+        return currentEvent != null ? currentEvent.nanos : 0L;
+    }
+
+    public static int getNumKeyboardEvents() {
+        synchronized (eventQueue) {
+            return eventQueue.size();
+        }
     }
 
     /**
@@ -468,7 +480,9 @@ public class KeyboardShim {
     private static class KeyEvent {
         final int key; // LWJGL 2 key code
         final boolean pressed;
+        final long nanos = System.nanoTime();
         char character;
+        boolean repeat;
 
         KeyEvent(int key, boolean pressed, char character) {
             this.key = key;
