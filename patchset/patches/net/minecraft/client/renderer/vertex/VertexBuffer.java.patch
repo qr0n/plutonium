@@ -1,0 +1,102 @@
+--- a/net/minecraft/client/renderer/vertex/VertexBuffer.java
++++ b/net/minecraft/client/renderer/vertex/VertexBuffer.java
+@@ -1,50 +1,73 @@
+ package net.minecraft.client.renderer.vertex;
+ 
+ import java.nio.ByteBuffer;
+-import net.minecraft.client.renderer.OpenGlHelper;
+-import org.lwjgl.opengl.GL11;
++import org.lwjgl.system.MemoryUtil;
++import plutonium.gpu.vk.VkMemory;
+ 
+ public class VertexBuffer
+ {
+-    private int glBufferId;
++    private VkMemory.Buf buffer;
+     private final VertexFormat vertexFormat;
+     private int count;
++    private int drawMode;
+ 
+     public VertexBuffer(VertexFormat vertexFormatIn)
+     {
+         this.vertexFormat = vertexFormatIn;
+-        this.glBufferId = OpenGlHelper.glGenBuffers();
+-    }
+-
+-    public void bindBuffer()
+-    {
+-        OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, this.glBufferId);
+     }
+ 
+     public void func_181722_a(ByteBuffer p_181722_1_)
+     {
+-        this.bindBuffer();
+-        OpenGlHelper.glBufferData(OpenGlHelper.GL_ARRAY_BUFFER, p_181722_1_, 35044);
+-        this.unbindBuffer();
+-        this.count = p_181722_1_.limit() / this.vertexFormat.getNextOffset();
+-    }
++        int bytes = p_181722_1_.remaining();
++        // Never overwrite in place: a frame still in flight may be reading the old buffer,
++        // so it goes back to the pool on a fence and this upload gets a fresh one.
++        VkMemory.releaseVertexBuffer(this.buffer);
++        this.buffer = bytes > 0 ? VkMemory.acquireVertexBuffer(bytes) : null;
+ 
+-    public void drawArrays(int mode)
+-    {
+-        GL11.glDrawArrays(mode, 0, this.count);
+-    }
++        if (this.buffer != null)
++        {
++            MemoryUtil.memCopy(MemoryUtil.memAddress(p_181722_1_), this.buffer.hostPtr, bytes);
++        }
+ 
+-    public void unbindBuffer()
+-    {
+-        OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, 0);
++        this.count = bytes / this.vertexFormat.getNextOffset();
+     }
+ 
+     public void deleteGlBuffers()
+     {
+-        if (this.glBufferId >= 0)
+-        {
+-            OpenGlHelper.glDeleteBuffers(this.glBufferId);
+-            this.glBufferId = -1;
+-        }
++        VkMemory.releaseVertexBuffer(this.buffer);
++        this.buffer = null;
++        this.count = 0;
++    }
++
++    public int getDrawMode()
++    {
++        return this.drawMode;
++    }
++
++    public int getCount()
++    {
++        return this.count;
++    }
++
++    public VertexFormat getVertexFormat()
++    {
++        return this.vertexFormat;
++    }
++
++    /** The backing VkBuffer handle, or 0 when this buffer holds no geometry. */
++    public long getVkBuffer()
++    {
++        return this.buffer != null ? this.buffer.buffer : 0L;
++    }
++
++    /** Where this buffer's geometry starts inside getVkBuffer() (pooled buffers share slabs). */
++    public long getVkOffset()
++    {
++        return this.buffer != null ? this.buffer.offset : 0L;
++    }
++
++    public void setDrawMode(int p_setDrawMode_1_)
++    {
++        this.drawMode = p_setDrawMode_1_;
+     }
+ }

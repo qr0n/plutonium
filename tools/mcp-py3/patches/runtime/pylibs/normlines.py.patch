@@ -1,0 +1,33 @@
+--- a/runtime/pylibs/normlines.py
++++ b/runtime/pylibs/normlines.py
+@@ -17,14 +17,14 @@
+         if dir_name:
+             if not os.path.exists(dir_name):
+                 os.makedirs(dir_name)
+-    regex_ending = re.compile(r'\r?\n')
++    regex_ending = re.compile(rb'\r?\n')
+     with open(in_filename, 'rb') as in_file:
+         with open(tmp_filename, 'wb') as out_file:
+             buf = in_file.read()
+             if os.linesep == '\r\n':
+-                buf = regex_ending.sub(r'\r\n', buf)
++                buf = regex_ending.sub(rb'\r\n', buf)
+             else:
+-                buf = buf.replace('\r\n', '\n')
++                buf = buf.replace(b'\r\n', b'\n')
+             out_file.write(buf)
+     if out_filename is None:
+         shutil.move(tmp_filename, in_filename)
+@@ -57,10 +57,10 @@
+         in_name = args[0]
+         out_name = args[1]
+     else:
+-        print >> sys.stderr, 'src_file or src_dir required'
++        print('src_file or src_dir required', file=sys.stderr)
+         sys.exit(1)
+     if not os.path.exists(in_name):
+-        print >> sys.stderr, 'src_file or src_dir not found'
++        print('src_file or src_dir not found', file=sys.stderr)
+         sys.exit(1)
+     if os.path.isfile(in_name):
+         normaliselines(in_name, out_name)

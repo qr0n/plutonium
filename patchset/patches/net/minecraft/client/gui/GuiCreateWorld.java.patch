@@ -1,0 +1,29 @@
+--- a/net/minecraft/client/gui/GuiCreateWorld.java
++++ b/net/minecraft/client/gui/GuiCreateWorld.java
+@@ -9,7 +9,7 @@
+ import net.minecraft.world.storage.ISaveFormat;
+ import net.minecraft.world.storage.WorldInfo;
+ import org.apache.commons.lang3.StringUtils;
+-import org.lwjgl.input.Keyboard;
++import plutonium.gpu.KeyboardShim;
+ 
+ public class GuiCreateWorld extends GuiScreen
+ {
+@@ -56,7 +56,7 @@
+ 
+     public void initGui()
+     {
+-        Keyboard.enableRepeatEvents(true);
++        KeyboardShim.enableRepeatEvents(true);
+         this.buttonList.clear();
+         this.buttonList.add(new GuiButton(0, this.width / 2 - 155, this.height - 28, 150, 20, I18n.format("selectWorld.create", new Object[0])));
+         this.buttonList.add(new GuiButton(1, this.width / 2 + 5, this.height - 28, 150, 20, I18n.format("gui.cancel", new Object[0])));
+@@ -161,7 +161,7 @@
+ 
+     public void onGuiClosed()
+     {
+-        Keyboard.enableRepeatEvents(false);
++        KeyboardShim.enableRepeatEvents(false);
+     }
+ 
+     protected void actionPerformed(GuiButton button) throws IOException

@@ -1,0 +1,195 @@
+--- a/net/minecraft/client/gui/GuiChat.java
++++ b/net/minecraft/client/gui/GuiChat.java
+@@ -12,8 +12,8 @@
+ import org.apache.commons.lang3.StringUtils;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.input.Keyboard;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.KeyboardShim;
++import plutonium.gpu.MouseShim;
+ 
+ public class GuiChat extends GuiScreen
+ {
+@@ -38,7 +38,7 @@
+ 
+     public void initGui()
+     {
+-        Keyboard.enableRepeatEvents(true);
++        KeyboardShim.enableRepeatEvents(true);
+         this.sentHistoryCursor = this.mc.ingameGUI.getChatGUI().getSentMessages().size();
+         this.inputField = new GuiTextField(0, this.fontRendererObj, 4, this.height - 12, this.width - 4, 12);
+         this.inputField.setMaxStringLength(100);
+@@ -50,7 +50,7 @@
+ 
+     public void onGuiClosed()
+     {
+-        Keyboard.enableRepeatEvents(false);
++        KeyboardShim.enableRepeatEvents(false);
+         this.mc.ingameGUI.getChatGUI().resetScroll();
+     }
+ 
+@@ -105,7 +105,12 @@
+ 
+             if (s.length() > 0)
+             {
+-                this.sendChatMessage(s);
++                boolean handled = handleFilterCommand(s) || plutonium.module.modules.Translator.handleOutgoing(s);
++
++                if (!handled)
++                {
++                    this.sendChatMessage(s);
++                }
+             }
+ 
+             this.mc.displayGuiScreen((GuiScreen)null);
+@@ -115,7 +120,7 @@
+     public void handleMouseInput() throws IOException
+     {
+         super.handleMouseInput();
+-        int i = Mouse.getEventDWheel();
++        int i = MouseShim.getEventDWheel();
+ 
+         if (i != 0)
+         {
+@@ -142,10 +147,35 @@
+     {
+         if (mouseButton == 0)
+         {
+-            IChatComponent ichatcomponent = this.mc.ingameGUI.getChatGUI().getChatComponent(Mouse.getX(), Mouse.getY());
++            IChatComponent ichatcomponent = this.mc.ingameGUI.getChatGUI().getChatComponent(MouseShim.getX(), MouseShim.getY());
+ 
+             if (this.handleComponentClick(ichatcomponent))
+             {
++                return;
++            }
++        }
++        else if (mouseButton == 1)
++        {
++            String lineText = this.mc.ingameGUI.getChatGUI().getFullLineTextAt(MouseShim.getX(), MouseShim.getY());
++
++            if (lineText != null && !lineText.isEmpty())
++            {
++                // If this is a filtered placeholder, reveal the original message
++                if (plutonium.module.modules.ChatFilter.isFilteredPlaceholder(lineText))
++                {
++                    int fid = plutonium.module.modules.ChatFilter.extractFilterId(lineText);
++                    String original = fid >= 0 ? plutonium.module.modules.ChatFilter.revealFiltered(fid) : null;
++                    this.mc.ingameGUI.getChatGUI().printChatMessageUnfiltered(original != null
++                        ? new ChatComponentText("§7[Revealed] §r" + original)
++                        : new ChatComponentText("§c[ChatFilter] That message is no longer stored."));
++                    return;
++                }
++
++                // GLFW clipboard (AWT is unavailable under -Djava.awt.headless=true).
++                // Unfiltered: the echo repeats the copied line, which may itself match a filter.
++                setClipboardString(lineText);
++                this.mc.ingameGUI.getChatGUI().printChatMessageUnfiltered(
++                    new ChatComponentText("§7[Plutonium] Copied: §f" + lineText), 9999);
+                 return;
+             }
+         }
+@@ -261,7 +291,7 @@
+     {
+         drawRect(2, this.height - 14, this.width - 2, this.height - 2, Integer.MIN_VALUE);
+         this.inputField.drawTextBox();
+-        IChatComponent ichatcomponent = this.mc.ingameGUI.getChatGUI().getChatComponent(Mouse.getX(), Mouse.getY());
++        IChatComponent ichatcomponent = this.mc.ingameGUI.getChatGUI().getChatComponent(MouseShim.getX(), MouseShim.getY());
+ 
+         if (ichatcomponent != null && ichatcomponent.getChatStyle().getChatHoverEvent() != null)
+         {
+@@ -302,6 +332,94 @@
+         }
+     }
+ 
++    /**
++     * Handles /pf (plutonium filter) commands locally without sending to the server.
++     * Returns true if the input was consumed as a filter command.
++     */
++    private boolean handleFilterCommand(String input)
++    {
++        if (!input.startsWith("/pf")) return false;
++
++        String rest = input.substring(3).trim(); // everything after "/pf"
++        net.minecraft.client.gui.GuiNewChat chat = this.mc.ingameGUI.getChatGUI();
++
++        if (rest.isEmpty() || rest.equals("help"))
++        {
++            chat.printChatMessageUnfiltered(new ChatComponentText("§e[ChatFilter] §7Commands:"));
++            chat.printChatMessageUnfiltered(new ChatComponentText("§7  /pf add <text>    §f- add a filter"));
++            chat.printChatMessageUnfiltered(new ChatComponentText("§7  /pf remove <n>    §f- remove filter by index"));
++            chat.printChatMessageUnfiltered(new ChatComponentText("§7  /pf list          §f- list all filters"));
++            chat.printChatMessageUnfiltered(new ChatComponentText("§7  /pf clear         §f- remove all filters"));
++            return true;
++        }
++
++        if (rest.startsWith("add "))
++        {
++            String phrase = rest.substring(4).trim();
++            if (phrase.isEmpty())
++            {
++                chat.printChatMessageUnfiltered(new ChatComponentText("§c[ChatFilter] Usage: /pf add <text>"));
++            }
++            else if (plutonium.module.modules.ChatFilter.addFilter(phrase))
++            {
++                chat.printChatMessageUnfiltered(new ChatComponentText(
++                    "§e[ChatFilter] §aAdded filter: §f" + phrase));
++            }
++            else
++            {
++                chat.printChatMessageUnfiltered(new ChatComponentText(
++                    "§e[ChatFilter] §cFilter already exists: §f" + phrase));
++            }
++            return true;
++        }
++
++        if (rest.startsWith("remove "))
++        {
++            String arg = rest.substring(7).trim();
++            try
++            {
++                int idx = Integer.parseInt(arg) - 1; // 1-based input
++                if (plutonium.module.modules.ChatFilter.removeFilter(idx))
++                    chat.printChatMessageUnfiltered(new ChatComponentText("§e[ChatFilter] §aRemoved filter #" + (idx + 1)));
++                else
++                    chat.printChatMessageUnfiltered(new ChatComponentText("§c[ChatFilter] Invalid index: " + (idx + 1)));
++            }
++            catch (NumberFormatException e)
++            {
++                chat.printChatMessageUnfiltered(new ChatComponentText("§c[ChatFilter] Usage: /pf remove <number>"));
++            }
++            return true;
++        }
++
++        if (rest.equals("list"))
++        {
++            java.util.List<String> filters = plutonium.module.modules.ChatFilter.getFilters();
++            if (filters.isEmpty())
++            {
++                chat.printChatMessageUnfiltered(new ChatComponentText("§e[ChatFilter] §7No active filters."));
++            }
++            else
++            {
++                chat.printChatMessageUnfiltered(new ChatComponentText("§e[ChatFilter] §7Active filters (" + filters.size() + "):"));
++                for (int i = 0; i < filters.size(); i++)
++                {
++                    chat.printChatMessageUnfiltered(new ChatComponentText("§7  " + (i + 1) + ". §f" + filters.get(i)));
++                }
++            }
++            return true;
++        }
++
++        if (rest.equals("clear"))
++        {
++            plutonium.module.modules.ChatFilter.clearFilters();
++            chat.printChatMessageUnfiltered(new ChatComponentText("§e[ChatFilter] §aAll filters cleared."));
++            return true;
++        }
++
++        chat.printChatMessageUnfiltered(new ChatComponentText("§c[ChatFilter] Unknown command. Type /pf help for usage."));
++        return true;
++    }
++
+     public boolean doesGuiPauseGame()
+     {
+         return false;

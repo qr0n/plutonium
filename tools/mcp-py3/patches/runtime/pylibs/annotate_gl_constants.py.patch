@@ -1,0 +1,31 @@
+--- a/runtime/pylibs/annotate_gl_constants.py
++++ b/runtime/pylibs/annotate_gl_constants.py
+@@ -7,8 +7,9 @@
+ @version: v0.1
+ """
+ 
++from py2compat import open
+ import sys
+-import re
++import py2re as re
+ import shutil
+ import os
+ import fnmatch
+@@ -1283,7 +1284,7 @@
+             constant = int(full_match)
+             for group in _CONSTANTS:
+                 if package in group[0] and method in group[0][package]:
+-                    for constpkg, const in group[1].items():
++                    for constpkg, const in list(group[1].items()):
+                         if constant in const:
+                             return '%s.%s' % (constpkg, const[constant])
+             return full_match
+@@ -1326,7 +1327,7 @@
+     parser = OptionParser(version=version, usage=usage)
+     options, args = parser.parse_args()
+     if len(args) != 1:
+-        print >> sys.stderr, 'src_dir required'
++        print('src_dir required', file=sys.stderr)
+         sys.exit(1)
+     annotate_dir(args[0])
+ 

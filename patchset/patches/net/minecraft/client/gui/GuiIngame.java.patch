@@ -1,0 +1,56 @@
+--- a/net/minecraft/client/gui/GuiIngame.java
++++ b/net/minecraft/client/gui/GuiIngame.java
+@@ -141,9 +141,19 @@
+ 
+         if (this.showCrosshair())
+         {
+-            GlStateManager.tryBlendFuncSeparate(775, 769, 1, 0);
+-            GlStateManager.enableAlpha();
+-            this.drawTexturedModalRect(i / 2 - 7, j / 2 - 7, 0, 0, 16, 16);
++            if (!plutonium.module.modules.Crosshair.drawCustomCrosshair(i, j))
++            {
++                GlStateManager.tryBlendFuncSeparate(775, 769, 1, 0);
++                GlStateManager.enableAlpha();
++                // The crosshair uses an inverted blend (ONE_MINUS_DST_COLOR). Deferring it
++                // into GuiQuadBatch would draw it later under the HUD's normal alpha blend,
++                // rendering its opaque background as a black box. Draw it immediately instead;
++                // the bindTexture/enableBlend above already flushed any pending HUD quads.
++                boolean prevQuadBatch = plutonium.gpu.GuiQuadBatch.ENABLED;
++                plutonium.gpu.GuiQuadBatch.ENABLED = false;
++                this.drawTexturedModalRect(i / 2 - 7, j / 2 - 7, 0, 0, 16, 16);
++                plutonium.gpu.GuiQuadBatch.ENABLED = prevQuadBatch;
++            }
+         }
+ 
+         GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+@@ -298,7 +308,7 @@
+ 
+         ScoreObjective scoreobjective1 = scoreobjective != null ? scoreobjective : scoreboard.getObjectiveInDisplaySlot(1);
+ 
+-        if (scoreobjective1 != null)
++        if (scoreobjective1 != null && !plutonium.module.modules.ScoreboardMod.shouldHideScoreboard())
+         {
+             this.renderScoreboard(scoreobjective1, scaledresolution);
+         }
+@@ -327,6 +337,13 @@
+         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+         GlStateManager.disableLighting();
+         GlStateManager.enableAlpha();
++
++        // Plutonium HUD modules
++        GlStateManager.enableBlend();
++        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
++        plutonium.Plutonium.getInstance().onRenderHUD(i, j);
++        plutonium.ScreenshotToast.INSTANCE.render(i, j, partialTicks);
++        GlStateManager.disableBlend();
+     }
+ 
+     protected void renderTooltip(ScaledResolution sr, float partialTicks)
+@@ -1039,6 +1056,7 @@
+         }
+ 
+         ++this.updateCounter;
++        plutonium.ScreenshotToast.INSTANCE.tick();
+         this.streamIndicator.func_152439_a();
+ 
+         if (this.mc.thePlayer != null)

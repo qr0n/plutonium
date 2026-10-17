@@ -1,0 +1,25 @@
+--- a/net/minecraft/client/renderer/entity/RenderManager.java
++++ b/net/minecraft/client/renderer/entity/RenderManager.java
+@@ -288,7 +288,13 @@
+ 
+     public boolean renderEntitySimple(Entity entityIn, float partialTicks)
+     {
+-        return this.renderEntityStatic(entityIn, partialTicks, false);
++        long _t0 = System.nanoTime();
++        try {
++            return this.renderEntityStatic(entityIn, partialTicks, false);
++        } finally {
++            plutonium.gpu.DrawStats.nsEntCpu += System.nanoTime() - _t0;
++            plutonium.gpu.DrawStats.cEnt++;
++        }
+     }
+ 
+     public boolean shouldRender(Entity entityIn, ICamera camera, double camX, double camY, double camZ)
+@@ -349,6 +355,7 @@
+ 
+     public boolean doRenderEntity(Entity entity, double x, double y, double z, float entityYaw, float partialTicks, boolean p_147939_10_)
+     {
++
+         Render<Entity> render = null;
+ 
+         try

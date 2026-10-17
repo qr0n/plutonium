@@ -1,0 +1,20 @@
+--- a/net/minecraft/client/gui/GuiEnchantment.java
++++ b/net/minecraft/client/gui/GuiEnchantment.java
+@@ -20,7 +20,7 @@
+ import net.minecraft.util.ResourceLocation;
+ import net.minecraft.world.IWorldNameable;
+ import net.minecraft.world.World;
+-import org.lwjgl.util.glu.Project;
++import plutonium.gpu.GLUCompat;
+ 
+ public class GuiEnchantment extends GuiContainer
+ {
+@@ -92,7 +92,7 @@
+         ScaledResolution scaledresolution = new ScaledResolution(this.mc);
+         GlStateManager.viewport((scaledresolution.getScaledWidth() - 320) / 2 * scaledresolution.getScaleFactor(), (scaledresolution.getScaledHeight() - 240) / 2 * scaledresolution.getScaleFactor(), 320 * scaledresolution.getScaleFactor(), 240 * scaledresolution.getScaleFactor());
+         GlStateManager.translate(-0.34F, 0.23F, 0.0F);
+-        Project.gluPerspective(90.0F, 1.3333334F, 9.0F, 80.0F);
++        GLUCompat.gluPerspective(90.0F, 1.3333334F, 9.0F, 80.0F);
+         float f = 1.0F;
+         GlStateManager.matrixMode(5888);
+         GlStateManager.loadIdentity();

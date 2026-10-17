@@ -1,0 +1,22 @@
+--- a/net/minecraft/client/renderer/ItemRenderer.java
++++ b/net/minecraft/client/renderer/ItemRenderer.java
+@@ -178,7 +178,7 @@
+         this.mc.getTextureManager().bindTexture(RES_MAP_BACKGROUND);
+         Tessellator tessellator = Tessellator.getInstance();
+         WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+-        GL11.glNormal3f(0.0F, 0.0F, -1.0F);
++        // glNormal3f removed (core profile)
+         worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX);
+         worldrenderer.pos(-7.0D, 135.0D, 0.0D).tex(0.0D, 1.0D).endVertex();
+         worldrenderer.pos(135.0D, 135.0D, 0.0D).tex(1.0D, 1.0D).endVertex();
+@@ -249,6 +249,10 @@
+ 
+     private void transformFirstPersonItem(float equipProgress, float swingProgress)
+     {
++        if (plutonium.module.modules.OldAnimations.isActive()) {
++            plutonium.module.modules.OldAnimations.applyTransform(equipProgress, swingProgress);
++            return;
++        }
+         GlStateManager.translate(0.56F, -0.52F, -0.71999997F);
+         GlStateManager.translate(0.0F, equipProgress * -0.6F, 0.0F);
+         GlStateManager.rotate(45.0F, 0.0F, 1.0F, 0.0F);

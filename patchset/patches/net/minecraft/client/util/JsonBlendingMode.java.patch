@@ -1,0 +1,11 @@
+--- a/net/minecraft/client/util/JsonBlendingMode.java
++++ b/net/minecraft/client/util/JsonBlendingMode.java
+@@ -59,7 +59,7 @@
+                 GlStateManager.enableBlend();
+             }
+ 
+-            GL14.glBlendEquation(this.field_148112_f);
++            // Blend equation is always ADD under the Vulkan pipeline (vanilla only uses ADD).
+ 
+             if (this.field_148113_g)
+             {

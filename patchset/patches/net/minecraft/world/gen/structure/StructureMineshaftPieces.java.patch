@@ -1,0 +1,15 @@
+--- a/net/minecraft/world/gen/structure/StructureMineshaftPieces.java
++++ b/net/minecraft/world/gen/structure/StructureMineshaftPieces.java
+@@ -606,9 +606,9 @@
+                 j = 1;
+             }
+ 
+-            int k;
+-
+-            for (lvt_5_1_ = 0; k < this.boundingBox.getXSize(); k = k + 4)
++            int k = 0;
++
++            for (int lvt_5_1_ = 0; k < this.boundingBox.getXSize(); k = k + 4)
+             {
+                 k = k + rand.nextInt(this.boundingBox.getXSize());
+ 

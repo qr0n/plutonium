@@ -1,0 +1,37 @@
+--- a/net/minecraft/client/model/ModelBox.java
++++ b/net/minecraft/client/model/ModelBox.java
+@@ -86,6 +86,34 @@
+         }
+     }
+ 
++    /** Emit all faces into an already-begun WorldRenderer (mode 7) for batched model draws. */
++    public void emit(WorldRenderer renderer, float scale)
++    {
++        for (int i = 0; i < this.quadList.length; ++i)
++        {
++            TexturedQuad texturedquad = this.quadList[i];
++
++            if (texturedquad != null)
++            {
++                texturedquad.emit(renderer, scale);
++            }
++        }
++    }
++
++    /** Emit all faces into a batch buffer, baking the modelview into positions (eye space). */
++    public void emitTransformed(WorldRenderer renderer, float scale, plutonium.gpu.math.Matrix4f mv)
++    {
++        for (int i = 0; i < this.quadList.length; ++i)
++        {
++            TexturedQuad texturedquad = this.quadList[i];
++
++            if (texturedquad != null)
++            {
++                texturedquad.emitTransformed(renderer, scale, mv);
++            }
++        }
++    }
++
+     public ModelBox setBoxName(String name)
+     {
+         this.boxName = name;

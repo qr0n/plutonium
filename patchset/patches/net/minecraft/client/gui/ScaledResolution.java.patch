@@ -1,0 +1,51 @@
+--- a/net/minecraft/client/gui/ScaledResolution.java
++++ b/net/minecraft/client/gui/ScaledResolution.java
+@@ -13,9 +13,17 @@
+ 
+     public ScaledResolution(Minecraft p_i46445_1_)
+     {
+-        this.scaledWidth = p_i46445_1_.displayWidth;
+-        this.scaledHeight = p_i46445_1_.displayHeight;
+-        this.scaleFactor = 1;
++        // GUI scale is computed against the LOGICAL window size (mc.displayWidth ==
++        // window points == framebufferMc size), matching vanilla LWJGL2 semantics: the
++        // guiScale setting means the same thing it does on master, so guiScale:2 gives
++        // 2-point GUI units. (An earlier iteration used the physical Retina framebuffer
++        // here, which halved the on-screen GUI relative to the LWJGL2 build.) Scissor
++        // callers multiply GUI units by getScaleFactor(), producing logical pixels —
++        // VkDrawDispatch rescales those against WindowManager.getWindowWidth/Height.
++        int baseW = p_i46445_1_.displayWidth;
++        int baseH = p_i46445_1_.displayHeight;
++
++        int guiScale = 1;
+         boolean flag = p_i46445_1_.isUnicode();
+         int i = p_i46445_1_.gameSettings.guiScale;
+ 
+@@ -24,18 +32,21 @@
+             i = 1000;
+         }
+ 
+-        while (this.scaleFactor < i && this.scaledWidth / (this.scaleFactor + 1) >= 320 && this.scaledHeight / (this.scaleFactor + 1) >= 240)
++        while (guiScale < i && baseW / (guiScale + 1) >= 320 && baseH / (guiScale + 1) >= 240)
+         {
+-            ++this.scaleFactor;
++            ++guiScale;
+         }
+ 
+-        if (flag && this.scaleFactor % 2 != 0 && this.scaleFactor != 1)
++        if (flag && guiScale % 2 != 0 && guiScale != 1)
+         {
+-            --this.scaleFactor;
++            --guiScale;
+         }
+ 
+-        this.scaledWidthD = (double)this.scaledWidth / (double)this.scaleFactor;
+-        this.scaledHeightD = (double)this.scaledHeight / (double)this.scaleFactor;
++        this.scaleFactor = guiScale;
++        if (this.scaleFactor < 1) this.scaleFactor = 1;
++
++        this.scaledWidthD = (double)baseW / (double)this.scaleFactor;
++        this.scaledHeightD = (double)baseH / (double)this.scaleFactor;
+         this.scaledWidth = MathHelper.ceiling_double_int(this.scaledWidthD);
+         this.scaledHeight = MathHelper.ceiling_double_int(this.scaledHeightD);
+     }

@@ -1,0 +1,47 @@
+--- a/net/minecraft/network/NettyCompressionEncoder.java
++++ b/net/minecraft/network/NettyCompressionEncoder.java
+@@ -7,14 +7,15 @@
+ 
+ public class NettyCompressionEncoder extends MessageToByteEncoder<ByteBuf>
+ {
+-    private final byte[] buffer = new byte[8192];
++    private final byte[] deflateBuffer = new byte[8192];
+     private final Deflater deflater;
+     private int treshold;
++    private byte[] inputBuffer = new byte[8192];
+ 
+     public NettyCompressionEncoder(int treshold)
+     {
+         this.treshold = treshold;
+-        this.deflater = new Deflater();
++        this.deflater = new Deflater(Deflater.BEST_SPEED);
+     }
+ 
+     protected void encode(ChannelHandlerContext p_encode_1_, ByteBuf p_encode_2_, ByteBuf p_encode_3_) throws Exception
+@@ -29,16 +30,20 @@
+         }
+         else
+         {
+-            byte[] abyte = new byte[i];
+-            p_encode_2_.readBytes(abyte);
+-            packetbuffer.writeVarIntToBuffer(abyte.length);
+-            this.deflater.setInput(abyte, 0, i);
++            if (this.inputBuffer.length < i)
++            {
++                this.inputBuffer = new byte[i];
++            }
++
++            p_encode_2_.readBytes(this.inputBuffer, 0, i);
++            packetbuffer.writeVarIntToBuffer(i);
++            this.deflater.setInput(this.inputBuffer, 0, i);
+             this.deflater.finish();
+ 
+             while (!this.deflater.finished())
+             {
+-                int j = this.deflater.deflate(this.buffer);
+-                packetbuffer.writeBytes((byte[])this.buffer, 0, j);
++                int j = this.deflater.deflate(this.deflateBuffer);
++                packetbuffer.writeBytes((byte[])this.deflateBuffer, 0, j);
+             }
+ 
+             this.deflater.reset();

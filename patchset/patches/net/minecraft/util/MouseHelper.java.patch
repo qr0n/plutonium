@@ -1,0 +1,43 @@
+--- a/net/minecraft/util/MouseHelper.java
++++ b/net/minecraft/util/MouseHelper.java
+@@ -1,7 +1,7 @@
+ package net.minecraft.util;
+ 
+-import org.lwjgl.input.Mouse;
+-import org.lwjgl.opengl.Display;
++import plutonium.gpu.MouseShim;
++import plutonium.gpu.WindowManager;
+ 
+ public class MouseHelper
+ {
+@@ -10,20 +10,25 @@
+ 
+     public void grabMouseCursor()
+     {
+-        Mouse.setGrabbed(true);
++        MouseShim.setGrabbed(true);
+         this.deltaX = 0;
+         this.deltaY = 0;
+     }
+ 
+     public void ungrabMouseCursor()
+     {
+-        Mouse.setCursorPosition(Display.getWidth() / 2, Display.getHeight() / 2);
+-        Mouse.setGrabbed(false);
++        // Ungrab FIRST: switching GLFW_CURSOR_DISABLED -> NORMAL restores the OS cursor to its
++        // pre-grab spot, so any position set while still grabbed is discarded. Then re-center
++        // via MouseShim.setCursorPosition (updates the internal cursorX/Y the GUI reads, which
++        // WindowManager.setCursorPosition does NOT). Use the LOGICAL window size — GLFW cursor
++        // coords are logical points, not framebuffer pixels (getWidth() is the 2x-Retina fb).
++        MouseShim.setGrabbed(false);
++        MouseShim.setCursorPosition(WindowManager.getWindowWidth() / 2, WindowManager.getWindowHeight() / 2);
+     }
+ 
+     public void mouseXYChange()
+     {
+-        this.deltaX = Mouse.getDX();
+-        this.deltaY = Mouse.getDY();
++        this.deltaX = MouseShim.getDX();
++        this.deltaY = MouseShim.getDY();
+     }
+ }

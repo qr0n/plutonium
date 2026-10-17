@@ -1,0 +1,27 @@
+--- a/runtime/pylibs/normpatch.py
++++ b/runtime/pylibs/normpatch.py
+@@ -18,11 +18,11 @@
+     with open(in_filename, 'rb') as inpatch:
+         with open(tmp_filename, 'wb') as outpatch:
+             for line in inpatch:
+-                line = line.rstrip('\r\n')
+-                if line[:3] in ['+++', '---', 'Onl', 'dif']:
+-                    outpatch.write(line.replace('\\', os.sep).replace('/', os.sep) + os.linesep)
++                line = line.rstrip(b'\r\n')
++                if line[:3] in [b'+++', b'---', b'Onl', b'dif']:
++                    outpatch.write(line.replace(b'\\', os.sep.encode()).replace(b'/', os.sep.encode()) + os.linesep.encode())
+                 else:
+-                    outpatch.write(line + os.linesep)
++                    outpatch.write(line + os.linesep.encode())
+     if out_filename is None:
+         shutil.move(tmp_filename, in_filename)
+ 
+@@ -39,7 +39,7 @@
+         in_file = args[0]
+         out_file = args[1]
+     else:
+-        print >> sys.stderr, 'src_file required'
++        print('src_file required', file=sys.stderr)
+         sys.exit(1)
+     normalisepatch(in_file, out_file)
+ 

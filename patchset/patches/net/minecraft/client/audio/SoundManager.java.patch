@@ -1,0 +1,189 @@
+--- a/net/minecraft/client/audio/SoundManager.java
++++ b/net/minecraft/client/audio/SoundManager.java
+@@ -17,6 +17,12 @@
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Map.Entry;
++import javax.sound.sampled.AudioFormat;
++import javax.sound.sampled.AudioSystem;
++import javax.sound.sampled.Clip;
++import javax.sound.sampled.DataLine;
++import javax.sound.sampled.Mixer;
++import javax.sound.sampled.SourceDataLine;
+ import net.minecraft.client.Minecraft;
+ import net.minecraft.client.settings.GameSettings;
+ import net.minecraft.entity.player.EntityPlayer;
+@@ -32,7 +38,7 @@
+ import paulscode.sound.SoundSystemLogger;
+ import paulscode.sound.Source;
+ import paulscode.sound.codecs.CodecJOrbis;
+-import paulscode.sound.libraries.LibraryLWJGLOpenAL;
++import paulscode.sound.libraries.LibraryJavaSound;
+ 
+ public class SoundManager
+ {
+@@ -64,7 +70,7 @@
+ 
+         try
+         {
+-            SoundSystemConfig.addLibrary(LibraryLWJGLOpenAL.class);
++            SoundSystemConfig.addLibrary(LibraryJavaSound.class);
+             SoundSystemConfig.setCodec("ogg", CodecJOrbis.class);
+         }
+         catch (SoundSystemException soundsystemexception)
+@@ -116,6 +122,7 @@
+                         });
+                         SoundManager.this.sndSystem = SoundManager.this.new SoundSystemStarterThread();
+                         SoundManager.this.loaded = true;
++                        SoundManager.fixJavaSoundMixer();
+                         SoundManager.this.sndSystem.setMasterVolume(SoundManager.this.options.getSoundLevel(SoundCategory.MASTER));
+                         SoundManager.logger.info(SoundManager.LOG_MARKER, "Sound engine started");
+                     }
+@@ -130,6 +137,61 @@
+         }
+     }
+ 
++    /**
++     * paulscode's LibraryJavaSound auto-ranks mixers and on modern JDKs (notably
++     * macOS/Temurin 21) picks a "Port" mixer — the mic/speaker volume-control
++     * device, which cannot play audio. Every sound then fails with "Unable to
++     * create clip". If the engine's current mixer can't open a real playback
++     * line, force it onto one that supports both Clip and SourceDataLine. The
++     * library's own rank test logs a spurious "unuseable" error here, but actual
++     * playback through the forced mixer works.
++     */
++    static void fixJavaSoundMixer()
++    {
++        try
++        {
++            AudioFormat fmt = new AudioFormat(44100.0F, 16, 2, true, false);
++            DataLine.Info sdlInfo = new DataLine.Info(SourceDataLine.class, fmt);
++
++            Mixer current = LibraryJavaSound.getMixer();
++            if (current != null && current.isLineSupported(sdlInfo))
++            {
++                return; // already on a playback-capable mixer
++            }
++
++            DataLine.Info clipInfo = new DataLine.Info(Clip.class, fmt);
++            Mixer chosen = null;
++            for (Mixer.Info mi : AudioSystem.getMixerInfo())
++            {
++                Mixer m = AudioSystem.getMixer(mi);
++                if (m.isLineSupported(sdlInfo) && m.isLineSupported(clipInfo))
++                {
++                    chosen = m;
++                    // Prefer the system default device when available.
++                    if (mi.getName() != null && mi.getName().contains("Default"))
++                    {
++                        break;
++                    }
++                }
++            }
++
++            if (chosen != null)
++            {
++                LibraryJavaSound.setMixer(chosen);
++                logger.info(LOG_MARKER, "Forced JavaSound output mixer: " + chosen.getMixerInfo().getName());
++            }
++            else
++            {
++                logger.warn(LOG_MARKER, "No playback-capable JavaSound mixer found; audio may be silent");
++            }
++        }
++        catch (Throwable t)
++        {
++            // setMixer logs a benign "unuseable" rank error; ignore failures here.
++            logger.warn(LOG_MARKER, "Could not override JavaSound mixer", t);
++        }
++    }
++
+     private float getSoundCategoryVolume(SoundCategory category)
+     {
+         return category != null && category != SoundCategory.MASTER ? this.options.getSoundLevel(category) : 1.0F;
+@@ -137,7 +199,7 @@
+ 
+     public void setSoundCategoryVolume(SoundCategory category, float volume)
+     {
+-        if (this.loaded)
++        if (this.loaded && this.sndSystem != null)
+         {
+             if (category == SoundCategory.MASTER)
+             {
+@@ -165,7 +227,7 @@
+ 
+     public void unloadSoundSystem()
+     {
+-        if (this.loaded)
++        if (this.loaded && this.sndSystem != null)
+         {
+             this.stopAllSounds();
+             this.sndSystem.cleanup();
+@@ -175,7 +237,7 @@
+ 
+     public void stopAllSounds()
+     {
+-        if (this.loaded)
++        if (this.loaded && this.sndSystem != null)
+         {
+             for (String s : this.playingSounds.keySet())
+             {
+@@ -195,6 +257,8 @@
+     {
+         ++this.playTime;
+ 
++        if (this.sndSystem == null) return;
++
+         for (ITickableSound itickablesound : this.tickableSounds)
+         {
+             itickablesound.update();
+@@ -286,13 +350,13 @@
+         else
+         {
+             String s = (String)this.invPlayingSounds.get(sound);
+-            return s == null ? false : this.sndSystem.playing(s) || this.playingSoundsStopTime.containsKey(s) && ((Integer)this.playingSoundsStopTime.get(s)).intValue() <= this.playTime;
++            return s == null || this.sndSystem == null ? false : this.sndSystem.playing(s) || this.playingSoundsStopTime.containsKey(s) && ((Integer)this.playingSoundsStopTime.get(s)).intValue() <= this.playTime;
+         }
+     }
+ 
+     public void stopSound(ISound sound)
+     {
+-        if (this.loaded)
++        if (this.loaded && this.sndSystem != null)
+         {
+             String s = (String)this.invPlayingSounds.get(sound);
+ 
+@@ -305,7 +369,7 @@
+ 
+     public void playSound(ISound sound)
+     {
+-        if (this.loaded)
++        if (this.loaded && this.sndSystem != null)
+         {
+             if (this.sndSystem.getMasterVolume() <= 0.0F)
+             {
+@@ -396,6 +460,7 @@
+ 
+     public void pauseAllSounds()
+     {
++        if (this.sndSystem == null) return;
+         for (String s : this.playingSounds.keySet())
+         {
+             logger.debug(LOG_MARKER, "Pausing channel {}", new Object[] {s});
+@@ -405,6 +470,7 @@
+ 
+     public void resumeAllSounds()
+     {
++        if (this.sndSystem == null) return;
+         for (String s : this.playingSounds.keySet())
+         {
+             logger.debug(LOG_MARKER, "Resuming channel {}", new Object[] {s});
+@@ -449,7 +515,7 @@
+ 
+     public void setListener(EntityPlayer player, float p_148615_2_)
+     {
+-        if (this.loaded && player != null)
++        if (this.loaded && this.sndSystem != null && player != null)
+         {
+             float f = player.prevRotationPitch + (player.rotationPitch - player.prevRotationPitch) * p_148615_2_;
+             float f1 = player.prevRotationYaw + (player.rotationYaw - player.prevRotationYaw) * p_148615_2_;

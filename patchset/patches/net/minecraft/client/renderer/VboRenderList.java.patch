@@ -1,0 +1,65 @@
+--- a/net/minecraft/client/renderer/VboRenderList.java
++++ b/net/minecraft/client/renderer/VboRenderList.java
+@@ -3,39 +3,41 @@
+ import net.minecraft.client.renderer.chunk.RenderChunk;
+ import net.minecraft.client.renderer.vertex.VertexBuffer;
+ import net.minecraft.util.EnumWorldBlockLayer;
+-import org.lwjgl.opengl.GL11;
++import plutonium.gpu.CoreShaders;
++import plutonium.gpu.ShaderProgram;
++import plutonium.gpu.vk.VkDrawDispatch;
+ 
+ public class VboRenderList extends ChunkRenderContainer
+ {
+     public void renderChunkLayer(EnumWorldBlockLayer layer)
+     {
+-        if (this.initialized)
++        if (!this.initialized)
+         {
+-            for (RenderChunk renderchunk : this.renderChunks)
++            return;
++        }
++
++        ShaderProgram blockProgram = CoreShaders.getBlock();
++        blockProgram.use();
++
++        for (RenderChunk renderchunk : this.renderChunks)
++        {
++            VertexBuffer vertexbuffer = renderchunk.getVertexBufferByLayer(layer.ordinal());
++
++            if (vertexbuffer.getCount() > 0)
+             {
+-                VertexBuffer vertexbuffer = renderchunk.getVertexBufferByLayer(layer.ordinal());
+                 GlStateManager.pushMatrix();
+                 this.preRenderChunk(renderchunk);
+                 renderchunk.multModelviewMatrix();
+-                vertexbuffer.bindBuffer();
+-                this.setupArrayPointers();
+-                vertexbuffer.drawArrays(7);
++                GlStateManager.syncUniforms(blockProgram);   // per-chunk MVP → push constants
++                VkDrawDispatch.drawBuffer(vertexbuffer.getVertexFormat(), vertexbuffer.getVkBuffer(),
++                        vertexbuffer.getVkOffset(), vertexbuffer.getDrawMode(), vertexbuffer.getCount());
++                plutonium.gpu.DrawStats.chunk++;
+                 GlStateManager.popMatrix();
+             }
++        }
+ 
+-            OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, 0);
+-            GlStateManager.resetColor();
+-            this.renderChunks.clear();
+-        }
+-    }
+-
+-    private void setupArrayPointers()
+-    {
+-        GL11.glVertexPointer(3, GL11.GL_FLOAT, 28, 0L);
+-        GL11.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, 28, 12L);
+-        GL11.glTexCoordPointer(2, GL11.GL_FLOAT, 28, 16L);
+-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+-        GL11.glTexCoordPointer(2, GL11.GL_SHORT, 28, 24L);
+-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
++        ShaderProgram.unbind();
++        GlStateManager.resetColor();
++        this.renderChunks.clear();
+     }
+ }

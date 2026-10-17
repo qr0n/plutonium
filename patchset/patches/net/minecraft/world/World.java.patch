@@ -1,0 +1,66 @@
+--- a/net/minecraft/world/World.java
++++ b/net/minecraft/world/World.java
+@@ -1491,26 +1491,31 @@
+         }
+ 
+         this.theProfiler.endStartSection("remove");
+-        this.loadedEntityList.removeAll(this.unloadedEntityList);
+-
+-        for (int k = 0; k < this.unloadedEntityList.size(); ++k)
+-        {
+-            Entity entity1 = (Entity)this.unloadedEntityList.get(k);
+-            int j = entity1.chunkCoordX;
+-            int l1 = entity1.chunkCoordZ;
+-
+-            if (entity1.addedToChunk && this.isChunkLoaded(j, l1, true))
+-            {
+-                this.getChunkFromChunkCoords(j, l1).removeEntity(entity1);
+-            }
+-        }
+-
+-        for (int l = 0; l < this.unloadedEntityList.size(); ++l)
+-        {
+-            this.onEntityRemoved((Entity)this.unloadedEntityList.get(l));
+-        }
+-
+-        this.unloadedEntityList.clear();
++
++        if (!this.unloadedEntityList.isEmpty())
++        {
++            java.util.HashSet<Entity> unloadedSet = new java.util.HashSet<Entity>(this.unloadedEntityList);
++            this.loadedEntityList.removeAll(unloadedSet);
++
++            for (int k = 0; k < this.unloadedEntityList.size(); ++k)
++            {
++                Entity entity1 = (Entity)this.unloadedEntityList.get(k);
++                int j = entity1.chunkCoordX;
++                int l1 = entity1.chunkCoordZ;
++
++                if (entity1.addedToChunk && this.isChunkLoaded(j, l1, true))
++                {
++                    this.getChunkFromChunkCoords(j, l1).removeEntity(entity1);
++                }
++            }
++
++            for (int l = 0; l < this.unloadedEntityList.size(); ++l)
++            {
++                this.onEntityRemoved((Entity)this.unloadedEntityList.get(l));
++            }
++
++            this.unloadedEntityList.clear();
++        }
+         this.theProfiler.endStartSection("regular");
+ 
+         for (int i1 = 0; i1 < this.loadedEntityList.size(); ++i1)
+@@ -1609,8 +1614,9 @@
+ 
+         if (!this.tileEntitiesToBeRemoved.isEmpty())
+         {
+-            this.tickableTileEntities.removeAll(this.tileEntitiesToBeRemoved);
+-            this.loadedTileEntityList.removeAll(this.tileEntitiesToBeRemoved);
++            java.util.HashSet<TileEntity> removeSet = new java.util.HashSet<TileEntity>(this.tileEntitiesToBeRemoved);
++            this.tickableTileEntities.removeAll(removeSet);
++            this.loadedTileEntityList.removeAll(removeSet);
+             this.tileEntitiesToBeRemoved.clear();
+         }
+ 

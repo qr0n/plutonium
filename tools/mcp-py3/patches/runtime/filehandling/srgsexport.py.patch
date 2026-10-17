@@ -1,0 +1,41 @@
+--- a/runtime/filehandling/srgsexport.py
++++ b/runtime/filehandling/srgsexport.py
+@@ -6,9 +6,10 @@
+ @version: 0.1
+ """
+ 
++from py2compat import open
+ import csv
+ 
+-import srgshandler
++from . import srgshandler
+ 
+ 
+ CLIENT = 0
+@@ -39,7 +40,7 @@
+         raise Exception("Side not recognized : %d" % side)
+ 
+     # HINT: We append the class elements. We also handle the special case of Minecraft, MinecraftApplet, MinecraftServer
+-    with open(csvclass, 'rb') as fh:
++    with open(csvclass, 'r') as fh:
+         csvreader = csv.DictReader(fh)
+         for row in csvreader:
+             if int(row['side']) == side:
+@@ -58,7 +59,7 @@
+                 classes.append([row['notch'], '%s/%s' % (row['package'], row['name'])])
+ 
+     # HINT: We append the method elements
+-    with open(csvmethods, 'rb') as fh:
++    with open(csvmethods, 'r') as fh:
+         csvreader = csv.DictReader(fh)
+         for row in csvreader:
+             if int(row['side']) == side:
+@@ -74,7 +75,7 @@
+                                 '%s/%s/%s %s' % (row['package'], row['classname'], row['searge'], row['sig'])])
+ 
+     # HINT: We append the field elements
+-    with open(csvfields, 'rb') as fh:
++    with open(csvfields, 'r') as fh:
+         csvreader = csv.DictReader(fh)
+         for row in csvreader:
+             if int(row['side']) == side:

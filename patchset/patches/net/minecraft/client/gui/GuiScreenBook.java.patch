@@ -1,0 +1,29 @@
+--- a/net/minecraft/client/gui/GuiScreenBook.java
++++ b/net/minecraft/client/gui/GuiScreenBook.java
+@@ -25,7 +25,7 @@
+ import net.minecraft.util.ResourceLocation;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.input.Keyboard;
++import plutonium.gpu.KeyboardShim;
+ 
+ public class GuiScreenBook extends GuiScreen
+ {
+@@ -92,7 +92,7 @@
+     public void initGui()
+     {
+         this.buttonList.clear();
+-        Keyboard.enableRepeatEvents(true);
++        KeyboardShim.enableRepeatEvents(true);
+ 
+         if (this.bookIsUnsigned)
+         {
+@@ -115,7 +115,7 @@
+ 
+     public void onGuiClosed()
+     {
+-        Keyboard.enableRepeatEvents(false);
++        KeyboardShim.enableRepeatEvents(false);
+     }
+ 
+     private void updateButtons()

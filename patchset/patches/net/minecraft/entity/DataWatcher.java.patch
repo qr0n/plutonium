@@ -1,0 +1,39 @@
+--- a/net/minecraft/entity/DataWatcher.java
++++ b/net/minecraft/entity/DataWatcher.java
+@@ -22,6 +22,7 @@
+     private boolean isBlank = true;
+     private static final Map < Class<?>, Integer > dataTypes = Maps. < Class<?>, Integer > newHashMap();
+     private final Map<Integer, DataWatcher.WatchableObject> watchedObjects = Maps.<Integer, DataWatcher.WatchableObject>newHashMap();
++    private final DataWatcher.WatchableObject[] watchedObjectsArray = new DataWatcher.WatchableObject[32];
+     private boolean objectChanged;
+     private ReadWriteLock lock = new ReentrantReadWriteLock();
+ 
+@@ -51,6 +52,7 @@
+             DataWatcher.WatchableObject datawatcher$watchableobject = new DataWatcher.WatchableObject(integer.intValue(), id, object);
+             this.lock.writeLock().lock();
+             this.watchedObjects.put(Integer.valueOf(id), datawatcher$watchableobject);
++            this.watchedObjectsArray[id] = datawatcher$watchableobject;
+             this.lock.writeLock().unlock();
+             this.isBlank = false;
+         }
+@@ -61,6 +63,7 @@
+         DataWatcher.WatchableObject datawatcher$watchableobject = new DataWatcher.WatchableObject(type, id, (Object)null);
+         this.lock.writeLock().lock();
+         this.watchedObjects.put(Integer.valueOf(id), datawatcher$watchableobject);
++        if (id >= 0 && id < 32) this.watchedObjectsArray[id] = datawatcher$watchableobject;
+         this.lock.writeLock().unlock();
+         this.isBlank = false;
+     }
+@@ -97,6 +100,12 @@
+ 
+     private DataWatcher.WatchableObject getWatchedObject(int id)
+     {
++        if (id >= 0 && id < 32)
++        {
++            DataWatcher.WatchableObject obj = this.watchedObjectsArray[id];
++            if (obj != null) return obj;
++        }
++
+         this.lock.readLock().lock();
+         DataWatcher.WatchableObject datawatcher$watchableobject;
+ 

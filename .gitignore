@@ -1,0 +1,15 @@
+# Generated from the patch set; never commit Minecraft source
+/src/
+bin/
+build/
+
+# Game directory: downloaded libraries, natives, assets, saves and personal config
+jars/
+
+# Launcher build output
+launcher/node_modules/
+launcher/src-tauri/target/
+
+*.log
+.DS_Store
+__pycache__/

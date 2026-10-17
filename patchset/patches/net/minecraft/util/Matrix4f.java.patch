@@ -1,0 +1,10 @@
+--- a/net/minecraft/util/Matrix4f.java
++++ b/net/minecraft/util/Matrix4f.java
+@@ -1,6 +1,6 @@
+ package net.minecraft.util;
+ 
+-public class Matrix4f extends org.lwjgl.util.vector.Matrix4f
++public class Matrix4f extends plutonium.gpu.math.Matrix4f
+ {
+     public Matrix4f(float[] p_i46413_1_)
+     {

@@ -1,0 +1,29 @@
+--- a/net/minecraft/client/gui/achievement/GuiAchievements.java
++++ b/net/minecraft/client/gui/achievement/GuiAchievements.java
+@@ -21,7 +21,7 @@
+ import net.minecraft.util.ChatComponentTranslation;
+ import net.minecraft.util.MathHelper;
+ import net.minecraft.util.ResourceLocation;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.MouseShim;
+ 
+ public class GuiAchievements extends GuiScreen implements IProgressMeter
+ {
+@@ -97,7 +97,7 @@
+         }
+         else
+         {
+-            if (Mouse.isButtonDown(0))
++            if (MouseShim.isButtonDown(0))
+             {
+                 int i = (this.width - this.field_146555_f) / 2;
+                 int j = (this.height - this.field_146557_g) / 2;
+@@ -127,7 +127,7 @@
+                 this.field_146554_D = 0;
+             }
+ 
+-            int i1 = Mouse.getDWheel();
++            int i1 = MouseShim.getDWheel();
+             float f3 = this.field_146570_r;
+ 
+             if (i1 < 0)

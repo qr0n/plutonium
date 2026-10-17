@@ -1,0 +1,13 @@
+--- a/net/minecraft/client/resources/model/ModelRotation.java
++++ b/net/minecraft/client/resources/model/ModelRotation.java
+@@ -4,8 +4,8 @@
+ import java.util.Map;
+ import net.minecraft.util.EnumFacing;
+ import net.minecraft.util.MathHelper;
+-import org.lwjgl.util.vector.Matrix4f;
+-import org.lwjgl.util.vector.Vector3f;
++import plutonium.gpu.math.Matrix4f;
++import plutonium.gpu.math.Vector3f;
+ 
+ public enum ModelRotation
+ {

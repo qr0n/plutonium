@@ -1,0 +1,11 @@
+--- a/net/minecraft/client/renderer/tileentity/TileEntitySignRenderer.java
++++ b/net/minecraft/client/renderer/tileentity/TileEntitySignRenderer.java
+@@ -79,7 +79,7 @@
+         float f3 = 0.015625F * f;
+         GlStateManager.translate(0.0F, 0.5F * f, 0.07F * f);
+         GlStateManager.scale(f3, -f3, f3);
+-        GL11.glNormal3f(0.0F, 0.0F, -1.0F * f3);
++            // glNormal3f removed (core profile)
+         GlStateManager.depthMask(false);
+         int i = 0;
+ 

@@ -1,0 +1,20 @@
+--- a/runtime/pylibs/cleanup_src.py
++++ b/runtime/pylibs/cleanup_src.py
+@@ -1,6 +1,7 @@
++from py2compat import open
+ import sys
+ import os
+-import re
++import py2re as re
+ import fnmatch
+ import shutil
+ from optparse import OptionParser
+@@ -285,7 +286,7 @@
+                       help='round long float and double constants', default=False)
+     options, args = parser.parse_args()
+     if len(args) != 1:
+-        print >> sys.stderr, 'src_dir required'
++        print('src_dir required', file=sys.stderr)
+         sys.exit(1)
+     cleanup_src(args[0], clean_comments=options.clean_comments, clean_src=options.clean_src,
+                 fix_imports=options.fix_imports, fix_unicode=options.fix_unicode, fix_charval=options.fix_charval,

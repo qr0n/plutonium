@@ -1,0 +1,75 @@
+--- a/net/minecraft/client/gui/GuiGameOver.java
++++ b/net/minecraft/client/gui/GuiGameOver.java
+@@ -1,6 +1,7 @@
+ package net.minecraft.client.gui;
+ 
+ import java.io.IOException;
++import net.minecraft.client.gui.clickgui.DrawUtils;
+ import net.minecraft.client.multiplayer.WorldClient;
+ import net.minecraft.client.renderer.GlStateManager;
+ import net.minecraft.client.resources.I18n;
+@@ -87,20 +88,56 @@
+ 
+     public void drawScreen(int mouseX, int mouseY, float partialTicks)
+     {
+-        this.drawGradientRect(0, 0, this.width, this.height, 1615855616, -1602211792);
++        GlStateManager.enableBlend();
++        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
++
++        // Plutonium dark bg with subtle purple vignette
++        Gui.drawRect(0, 0, this.width, this.height, 0xFF0E1118);
++        this.drawGradientRect(0, 0, this.width, this.height / 3, 0x5512283A, 0x00000000);
++        this.drawGradientRect(0, this.height * 2 / 3, this.width, this.height, 0x00000000, 0x5512283A);
++
++        boolean flag = this.mc.theWorld.getWorldInfo().isHardcoreModeEnabled();
++        String deathTitle = flag
++            ? I18n.format("deathScreen.title.hardcore", new Object[0])
++            : I18n.format("deathScreen.title", new Object[0]);
++
++        // Large title panel
++        int panelW = 280;
++        int panelX = this.width / 2 - panelW / 2;
++        int panelY = this.height / 4 - 10;
++        int headerH = 24;
++
++        DrawUtils.drawRect(panelX + 3, panelY + 4, panelW, headerH, 0x55000000);
++        DrawUtils.drawRoundedRect(panelX, panelY, panelW, headerH, DrawUtils.T_WIN_BG);
++        DrawUtils.drawRoundedRectBorder(panelX, panelY, panelW, headerH, DrawUtils.T_BORDER);
++        DrawUtils.drawGradientRect(panelX + 2, panelY + 1, panelW - 4, headerH - 2, DrawUtils.T_HEADER_TOP, DrawUtils.T_HEADER_BOT);
++        DrawUtils.drawGradientRect(panelX + 3, panelY + 1, panelW - 6, (headerH - 2) / 2, 0x22FFFFFF, 0x00FFFFFF);
++
++        // Death title (2x scaled)
+         GlStateManager.pushMatrix();
+         GlStateManager.scale(2.0F, 2.0F, 2.0F);
+-        boolean flag = this.mc.theWorld.getWorldInfo().isHardcoreModeEnabled();
+-        String s = flag ? I18n.format("deathScreen.title.hardcore", new Object[0]) : I18n.format("deathScreen.title", new Object[0]);
+-        this.drawCenteredString(this.fontRendererObj, s, this.width / 2 / 2, 30, 16777215);
++        int hw = this.fontRendererObj.getStringWidth(deathTitle);
++        this.fontRendererObj.drawString(deathTitle, this.width / 4 - hw / 2, panelY / 2 + (headerH - 16) / 2, DrawUtils.T_TEXT_PRIMARY);
+         GlStateManager.popMatrix();
+ 
+-        if (flag)
+-        {
+-            this.drawCenteredString(this.fontRendererObj, I18n.format("deathScreen.hardcoreInfo", new Object[0]), this.width / 2, 144, 16777215);
++        if (flag) {
++            this.drawCenteredString(this.fontRendererObj,
++                I18n.format("deathScreen.hardcoreInfo", new Object[0]),
++                this.width / 2, panelY + headerH + 8, DrawUtils.T_TEXT_SECONDARY);
+         }
+ 
+-        this.drawCenteredString(this.fontRendererObj, I18n.format("deathScreen.score", new Object[0]) + ": " + EnumChatFormatting.YELLOW + this.mc.thePlayer.getScore(), this.width / 2, 100, 16777215);
++        // Score
++        String scoreStr = I18n.format("deathScreen.score", new Object[0]) + ": "
++            + EnumChatFormatting.YELLOW + this.mc.thePlayer.getScore();
++        this.drawCenteredString(this.fontRendererObj, scoreStr, this.width / 2,
++            panelY + headerH + (flag ? 22 : 10), DrawUtils.T_TEXT_SECONDARY);
++
++        // Watermark
++        String wm = "Plutonium";
++        this.fontRendererObj.drawString(wm, this.width / 2 - this.fontRendererObj.getStringWidth(wm) / 2,
++            this.height - 14, DrawUtils.T_HEADER_BOT);
++
++        GlStateManager.disableBlend();
+         super.drawScreen(mouseX, mouseY, partialTicks);
+     }
+ 

@@ -1,0 +1,29 @@
+--- a/net/minecraft/client/gui/GuiScreenCustomizePresets.java
++++ b/net/minecraft/client/gui/GuiScreenCustomizePresets.java
+@@ -10,7 +10,7 @@
+ import net.minecraft.client.resources.I18n;
+ import net.minecraft.util.ResourceLocation;
+ import net.minecraft.world.gen.ChunkProviderSettings;
+-import org.lwjgl.input.Keyboard;
++import plutonium.gpu.KeyboardShim;
+ 
+ public class GuiScreenCustomizePresets extends GuiScreen
+ {
+@@ -31,7 +31,7 @@
+     public void initGui()
+     {
+         this.buttonList.clear();
+-        Keyboard.enableRepeatEvents(true);
++        KeyboardShim.enableRepeatEvents(true);
+         this.field_175315_a = I18n.format("createWorld.customize.custom.presets.title", new Object[0]);
+         this.field_175313_s = I18n.format("createWorld.customize.presets.share", new Object[0]);
+         this.field_175312_t = I18n.format("createWorld.customize.presets.list", new Object[0]);
+@@ -52,7 +52,7 @@
+ 
+     public void onGuiClosed()
+     {
+-        Keyboard.enableRepeatEvents(false);
++        KeyboardShim.enableRepeatEvents(false);
+     }
+ 
+     protected void mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException

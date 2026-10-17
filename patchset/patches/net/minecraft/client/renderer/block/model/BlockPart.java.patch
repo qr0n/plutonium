@@ -1,0 +1,11 @@
+--- a/net/minecraft/client/renderer/block/model/BlockPart.java
++++ b/net/minecraft/client/renderer/block/model/BlockPart.java
+@@ -13,7 +13,7 @@
+ import net.minecraft.util.EnumFacing;
+ import net.minecraft.util.JsonUtils;
+ import net.minecraft.util.MathHelper;
+-import org.lwjgl.util.vector.Vector3f;
++import plutonium.gpu.math.Vector3f;
+ 
+ public class BlockPart
+ {

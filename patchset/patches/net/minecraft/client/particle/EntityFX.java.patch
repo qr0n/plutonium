@@ -1,0 +1,26 @@
+--- a/net/minecraft/client/particle/EntityFX.java
++++ b/net/minecraft/client/particle/EntityFX.java
+@@ -26,6 +26,8 @@
+     public static double interpPosX;
+     public static double interpPosY;
+     public static double interpPosZ;
++    private int cachedBrightness = -1;
++    private int brightnessCacheTick = -1;
+ 
+     protected EntityFX(World worldIn, double posXIn, double posYIn, double posZIn)
+     {
+@@ -165,7 +167,13 @@
+         float f5 = (float)(this.prevPosX + (this.posX - this.prevPosX) * (double)partialTicks - interpPosX);
+         float f6 = (float)(this.prevPosY + (this.posY - this.prevPosY) * (double)partialTicks - interpPosY);
+         float f7 = (float)(this.prevPosZ + (this.posZ - this.prevPosZ) * (double)partialTicks - interpPosZ);
+-        int i = this.getBrightnessForRender(partialTicks);
++        int currentTick = this.particleAge;
++        if (this.cachedBrightness == -1 || currentTick - this.brightnessCacheTick >= 4)
++        {
++            this.cachedBrightness = this.getBrightnessForRender(partialTicks);
++            this.brightnessCacheTick = currentTick;
++        }
++        int i = this.cachedBrightness;
+         int j = i >> 16 & 65535;
+         int k = i & 65535;
+         worldRendererIn.pos((double)(f5 - p_180434_4_ * f4 - p_180434_7_ * f4), (double)(f6 - p_180434_5_ * f4), (double)(f7 - p_180434_6_ * f4 - p_180434_8_ * f4)).tex((double)f1, (double)f3).color(this.particleRed, this.particleGreen, this.particleBlue, this.particleAlpha).lightmap(j, k).endVertex();

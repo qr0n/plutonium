@@ -1,0 +1,132 @@
+--- a/net/minecraft/client/renderer/entity/Render.java
++++ b/net/minecraft/client/renderer/entity/Render.java
+@@ -146,11 +146,8 @@
+ 
+     private void renderShadow(Entity entityIn, double x, double y, double z, float shadowAlpha, float partialTicks)
+     {
+-        GlStateManager.enableBlend();
+-        GlStateManager.blendFunc(770, 771);
+-        this.renderManager.renderEngine.bindTexture(shadowTextures);
++        if (!plutonium.gpu.ShadowBatch.RENDER_SHADOWS) return;
+         World world = this.getWorldFromRenderManager();
+-        GlStateManager.depthMask(false);
+         float f = this.shadowSize;
+ 
+         if (entityIn instanceof EntityLiving)
+@@ -176,9 +173,26 @@
+         double d2 = x - d5;
+         double d3 = y - d0;
+         double d4 = z - d1;
+-        Tessellator tessellator = Tessellator.getInstance();
+-        WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+-        worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX_COLOR);
++
++        // Defer the shadow quads into the shared ShadowBatch (drawn once at the world→GUI
++        // boundary) instead of one blend-wrapped draw per entity. Falls back to the original
++        // inline path when batching is off.
++        boolean batched = plutonium.gpu.ShadowBatch.ENABLED;
++        WorldRenderer worldrenderer;
++
++        if (batched)
++        {
++            worldrenderer = plutonium.gpu.ShadowBatch.begin();
++        }
++        else
++        {
++            GlStateManager.enableBlend();
++            GlStateManager.blendFunc(770, 771);
++            this.renderManager.renderEngine.bindTexture(shadowTextures);
++            GlStateManager.depthMask(false);
++            worldrenderer = Tessellator.getInstance().getWorldRenderer();
++            worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX_COLOR);
++        }
+ 
+         for (BlockPos blockpos : BlockPos.getAllInBoxMutable(new BlockPos(i, k, i1), new BlockPos(j, l, j1)))
+         {
+@@ -186,14 +200,17 @@
+ 
+             if (block.getRenderType() != -1 && world.getLightFromNeighbors(blockpos) > 3)
+             {
+-                this.func_180549_a(block, x, y, z, blockpos, shadowAlpha, f, d2, d3, d4);
+-            }
+-        }
+-
+-        tessellator.draw();
+-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+-        GlStateManager.disableBlend();
+-        GlStateManager.depthMask(true);
++                this.func_180549_a(worldrenderer, block, x, y, z, blockpos, shadowAlpha, f, d2, d3, d4);
++            }
++        }
++
++        if (!batched)
++        {
++            Tessellator.getInstance().draw();
++            GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
++            GlStateManager.disableBlend();
++            GlStateManager.depthMask(true);
++        }
+     }
+ 
+     private World getWorldFromRenderManager()
+@@ -201,12 +218,10 @@
+         return this.renderManager.worldObj;
+     }
+ 
+-    private void func_180549_a(Block blockIn, double p_180549_2_, double p_180549_4_, double p_180549_6_, BlockPos pos, float p_180549_9_, float p_180549_10_, double p_180549_11_, double p_180549_13_, double p_180549_15_)
++    private void func_180549_a(WorldRenderer worldrenderer, Block blockIn, double p_180549_2_, double p_180549_4_, double p_180549_6_, BlockPos pos, float p_180549_9_, float p_180549_10_, double p_180549_11_, double p_180549_13_, double p_180549_15_)
+     {
+         if (blockIn.isFullCube())
+         {
+-            Tessellator tessellator = Tessellator.getInstance();
+-            WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+             double d0 = ((double)p_180549_9_ - (p_180549_4_ - ((double)pos.getY() + p_180549_13_)) / 2.0D) * 0.5D * (double)this.getWorldFromRenderManager().getLightBrightness(pos);
+ 
+             if (d0 >= 0.0D)
+@@ -308,10 +323,30 @@
+             float f1 = 0.016666668F * f;
+             GlStateManager.pushMatrix();
+             GlStateManager.translate((float)x + 0.0F, (float)y + entityIn.height + 0.5F, (float)z);
+-            GL11.glNormal3f(0.0F, 1.0F, 0.0F);
++            // glNormal3f removed (core profile)
+             GlStateManager.rotate(-this.renderManager.playerViewY, 0.0F, 1.0F, 0.0F);
+             GlStateManager.rotate(this.renderManager.playerViewX, 1.0F, 0.0F, 0.0F);
+             GlStateManager.scale(-f1, -f1, f1);
++
++            int i = 0;
++
++            if (str.equals("deadmau5"))
++            {
++                i = -10;
++            }
++
++            int j = fontrenderer.getStringWidth(str) / 2;
++
++            // Defer the label so all visible nametags batch into a few draws instead of ~3
++            // each. The billboard transform is now on the matrix stack; NametagBatch captures
++            // it and replays everything together at the world→GUI boundary. Fall through to the
++            // inline path only if batching is disabled or full.
++            if (plutonium.gpu.NametagBatch.submit(str, j, i))
++            {
++                GlStateManager.popMatrix();
++                return;
++            }
++
+             GlStateManager.disableLighting();
+             GlStateManager.depthMask(false);
+             GlStateManager.disableDepth();
+@@ -319,14 +354,6 @@
+             GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+             Tessellator tessellator = Tessellator.getInstance();
+             WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+-            int i = 0;
+-
+-            if (str.equals("deadmau5"))
+-            {
+-                i = -10;
+-            }
+-
+-            int j = fontrenderer.getStringWidth(str) / 2;
+             GlStateManager.disableTexture2D();
+             worldrenderer.begin(7, DefaultVertexFormats.POSITION_COLOR);
+             worldrenderer.pos((double)(-j - 1), (double)(-1 + i), 0.0D).color(0.0F, 0.0F, 0.0F, 0.25F).endVertex();

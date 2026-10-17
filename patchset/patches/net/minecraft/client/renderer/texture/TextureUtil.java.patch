@@ -1,0 +1,97 @@
+--- a/net/minecraft/client/renderer/texture/TextureUtil.java
++++ b/net/minecraft/client/renderer/texture/TextureUtil.java
+@@ -13,9 +13,6 @@
+ import org.apache.commons.io.IOUtils;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.opengl.GL11;
+-import org.lwjgl.opengl.GL14;
+-import org.lwjgl.opengl.GL12;
+ 
+ public class TextureUtil
+ {
+@@ -177,7 +174,7 @@
+             l = Math.min(i, p_147947_3_ - k);
+             int i1 = p_147947_2_ * l;
+             copyToBufferPos(p_147947_1_, j, i1);
+-            GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, p_147947_0_, p_147947_4_, p_147947_5_ + k, p_147947_2_, l, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, (IntBuffer)dataBuffer);
++            GlStateManager.glTexSubImage2D(3553, p_147947_0_, p_147947_4_, p_147947_5_ + k, p_147947_2_, l, 32993, 33639, (IntBuffer)dataBuffer);
+         }
+     }
+ 
+@@ -194,20 +191,24 @@
+ 
+     public static void allocateTextureImpl(int p_180600_0_, int p_180600_1_, int p_180600_2_, int p_180600_3_)
+     {
+-        deleteTexture(p_180600_0_);
++        // NOTE: do NOT deleteTexture(id) here. Deleting a freshly generated name and then
++        // re-binding it creates a texture object the allocator no longer tracks, so the same
++        // id gets handed out again and unrelated textures (font, logo, panorama) collide onto
++        // one object — the "black text/logo" bug. Binding the already-generated name and
++        // (re)defining its storage below is sufficient for both fresh allocation and reload.
+         bindTexture(p_180600_0_);
+ 
+         if (p_180600_1_ >= 0)
+         {
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, p_180600_1_);
+-            GL11.glTexParameterf(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MIN_LOD, 0.0F);
+-            GL11.glTexParameterf(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LOD, (float)p_180600_1_);
+-            GL11.glTexParameterf(GL11.GL_TEXTURE_2D, GL14.GL_TEXTURE_LOD_BIAS, 0.0F);
++            GlStateManager.glTexParameteri(3553, 33085, p_180600_1_);
++            GlStateManager.glTexParameterf(3553, 33082, 0.0F);
++            GlStateManager.glTexParameterf(3553, 33083, (float)p_180600_1_);
++            GlStateManager.glTexParameterf(3553, 34049, 0.0F);
+         }
+ 
+         for (int i = 0; i <= p_180600_1_; ++i)
+         {
+-            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, i, GL11.GL_RGBA, p_180600_2_ >> i, p_180600_3_ >> i, 0, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, (IntBuffer)((IntBuffer)null));
++            GlStateManager.glTexImage2D(3553, i, 6408, p_180600_2_ >> i, p_180600_3_ >> i, 0, 32993, 33639, (IntBuffer)((IntBuffer)null));
+         }
+     }
+ 
+@@ -234,7 +235,7 @@
+             int k1 = i * j1;
+             p_110993_0_.getRGB(0, i1, i, j1, aint, 0, i);
+             copyToBuffer(aint, k1);
+-            GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, p_110993_1_, p_110993_2_ + i1, i, j1, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, (IntBuffer)dataBuffer);
++            GlStateManager.glTexSubImage2D(3553, 0, p_110993_1_, p_110993_2_ + i1, i, j1, 32993, 33639, (IntBuffer)dataBuffer);
+         }
+     }
+ 
+@@ -242,13 +243,13 @@
+     {
+         if (p_110997_0_)
+         {
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_CLAMP);
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_CLAMP);
++            GlStateManager.glTexParameteri(3553, 10242, 10496);
++            GlStateManager.glTexParameteri(3553, 10243, 10496);
+         }
+         else
+         {
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
++            GlStateManager.glTexParameteri(3553, 10242, 10497);
++            GlStateManager.glTexParameteri(3553, 10243, 10497);
+         }
+     }
+ 
+@@ -261,13 +262,13 @@
+     {
+         if (p_147954_0_)
+         {
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, p_147954_1_ ? GL11.GL_LINEAR_MIPMAP_LINEAR : GL11.GL_LINEAR);
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
++            GlStateManager.glTexParameteri(3553, 10241, p_147954_1_ ? 9987 : 9729);
++            GlStateManager.glTexParameteri(3553, 10240, 9729);
+         }
+         else
+         {
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, p_147954_1_ ? GL11.GL_NEAREST_MIPMAP_LINEAR : GL11.GL_NEAREST);
+-            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
++            GlStateManager.glTexParameteri(3553, 10241, p_147954_1_ ? 9986 : 9728);
++            GlStateManager.glTexParameteri(3553, 10240, 9728);
+         }
+     }
+ 

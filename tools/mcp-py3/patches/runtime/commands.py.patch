@@ -1,0 +1,309 @@
+--- a/runtime/commands.py
++++ b/runtime/commands.py
+@@ -6,6 +6,7 @@
+ @version: v1.2
+ """
+ 
++from py2compat import open
+ import sys
+ import fnmatch
+ import logging
+@@ -13,10 +14,10 @@
+ import shutil
+ import zipfile
+ import csv
+-import re
++import py2re as re
+ import subprocess
+-import ConfigParser
+-import urllib
++import configparser
++import urllib.request, urllib.parse, urllib.error
+ import time
+ import stat
+ import errno
+@@ -136,7 +137,7 @@
+ def csv_header(csvfile):
+     fieldnames = []
+     if os.path.isfile(csvfile):
+-        with open(csvfile, 'rb') as fh:
++        with open(csvfile, 'r') as fh:
+             csvreader = csv.DictReader(fh)
+             fieldnames = csvreader.fieldnames
+     return set(fieldnames)
+@@ -154,16 +155,16 @@
+         """Read the version configuration file and return a full version string"""
+         full_version = None
+         try:
+-            config = ConfigParser.SafeConfigParser()
++            config = configparser.ConfigParser()
+             with open(os.path.normpath(cls._version_config)) as fh:
+-                config.readfp(fh)
++                config.read_file(fh)
+             data_version = config.get('VERSION', 'MCPVersion')
+             client_version = config.get('VERSION', 'ClientVersion')
+             server_version = config.get('VERSION', 'ServerVersion')
+             full_version = ' (data: %s, client: %s, server: %s)' % (data_version, client_version, server_version)
+         except IOError:
+             pass
+-        except ConfigParser.Error:
++        except configparser.Error:
+             pass
+ 
+         if full_version is None:
+@@ -209,15 +210,15 @@
+ 
+     def getVersions(self):
+         try:
+-            config = ConfigParser.SafeConfigParser()
++            config = configparser.ConfigParser()
+             with open(os.path.normpath(self._version_config)) as fh:
+-                config.readfp(fh)
++                config.read_file(fh)
+             client_version = config.get('VERSION', 'ClientVersion')
+             server_version = config.get('VERSION', 'ServerVersion')
+             return client_version, server_version
+         except IOError:
+             pass
+-        except ConfigParser.Error:
++        except configparser.Error:
+             pass
+ 
+         return None
+@@ -433,10 +434,10 @@
+ 
+     def readconf(self, workdir, json):
+         """Read the configuration file to setup some basic paths"""
+-        config = ConfigParser.SafeConfigParser()
++        config = configparser.ConfigParser()
+         try:
+             with open(os.path.normpath(self._default_config)) as fh:
+-                config.readfp(fh)
++                config.read_file(fh)
+             if self.conffile is not None:
+                 config.read(os.path.normpath(self.conffile))
+         except IOError:
+@@ -664,7 +665,7 @@
+         if not len(configpathclient) == 1 or not configpathclient[0] == '':
+             cpathclient.extend(configpathclient)
+ 
+-        for library in self.mcLibraries.values():
++        for library in list(self.mcLibraries.values()):
+             cpathclient.append(os.path.join(self.dirjars,library['filename']))
+ 
+         self.cpathclient = [os.path.normpath(p) for p in cpathclient]
+@@ -1015,7 +1016,7 @@
+             md5lcldict[cur_file] = (md5_file, os.stat(cur_file).st_mtime)
+         try:
+             update_url = self.updateurl + 'mcp.md5'
+-            listfh = urllib.urlopen(update_url)
++            listfh = urllib.request.urlopen(update_url)
+             if listfh.getcode() != 200:
+                 return []
+             md5srvlist = listfh.readlines()
+@@ -1028,7 +1029,7 @@
+             md5srvdict[entry.split()[0]] = (entry.split()[1], float(entry.split()[2]), entry.split()[3])
+ 
+         results = []
+-        for key, value in md5srvdict.items():
++        for key, value in list(md5srvdict.items()):
+             cur_file = os.path.normpath(key)
+             # HINT: If the remote entry is not in the local table, append
+             if cur_file not in md5lcldict:
+@@ -1265,16 +1266,16 @@
+         
+         # build map of access function changes
+         def filter_matched(key, value):
+-            if not k in meta['old']['access']:
++            if not key in meta['old']['access']:
+                 return False
+-            return meta['old']['access'][k]['ops'] == value['ops']
+-        access = [v for k,v in meta['new']['access'].items() if not filter_matched(k,v)]
++            return meta['old']['access'][key]['ops'] == value['ops']
++        access = [v for k,v in list(meta['new']['access'].items()) if not filter_matched(k,v)]
+         
+         mapped = {}
+         unmapped = []
+         for acc in access:
+             matched = False
+-            for k,v in meta['old']['access'].items():
++            for k,v in list(meta['old']['access'].items()):
+                 if not v['owner'] == acc['owner'] or not v['desc'] == acc['desc'] or not v['ops'] == acc['ops']:
+                     continue
+                 matched = True
+@@ -1340,7 +1341,7 @@
+ 
+         extra = '-e="%s"' % self.ffserverextra
+         if side == CLIENT:
+-            extra = ' '.join(['"-e=%s"' % os.path.join(self.dirjars, p['filename']) for p in self.mcLibraries.values()])
++            extra = ' '.join(['"-e=%s"' % os.path.join(self.dirjars, p['filename']) for p in list(self.mcLibraries.values())])
+         
+         # HINT: We pass in the exec output jar, this skips the need to extract the jar, and copy classes to there own folder
+         forkcmd = self.cmdfernflower.format(indir=ffinput[side], outdir=pathsrclk[side], extra=extra)
+@@ -1540,7 +1541,7 @@
+                 self.logger.warning('==================')
+                 self.logger.warning('')
+                 
+-        for k,v in patches.items():
++        for k,v in list(patches.items()):
+             apply_patchlist(v)
+ 
+     def recompile(self, side):
+@@ -1738,20 +1739,20 @@
+ 
+         # HINT: We read the relevant CSVs
+         names = {'methods': {}, 'fields': {}, 'params': {}}
+-        with open(self.csvmethods, 'rb') as fh:
++        with open(self.csvmethods, 'r') as fh:
+             methodsreader = csv.DictReader(fh)
+             for row in methodsreader:
+                 if int(row['side']) == side or int(row['side']) == 2:
+                     if row['name'] != row['searge']:
+                         names['methods'][row['searge']] = row['name']
+-        with open(self.csvfields, 'rb') as fh:
++        with open(self.csvfields, 'r') as fh:
+             fieldsreader = csv.DictReader(fh)
+             for row in fieldsreader:
+                 if int(row['side']) == side or int(row['side']) == 2:
+                     if row['name'] != row['searge']:
+                         names['fields'][row['searge']] = row['name']
+         if self.has_param_csv:
+-            with open(self.csvparams, 'rb') as fh:
++            with open(self.csvparams, 'r') as fh:
+                 paramsreader = csv.DictReader(fh)
+                 for row in paramsreader:
+                     if int(row['side']) == side or int(row['side']) == 2:
+@@ -1806,7 +1807,7 @@
+ 
+         # HINT: We read the relevant CSVs
+         mapping = {'methods': {}, 'fields': {}, 'params': {}}
+-        with open(self.csvnewids, 'rb') as fh:
++        with open(self.csvnewids, 'r') as fh:
+             in_csv = csv.DictReader(fh)
+             for line in in_csv:
+                 in_id = None
+@@ -1835,7 +1836,7 @@
+             tmp_file = src_file + '.tmp'
+             with open(src_file, 'r') as fh:
+                 buf = fh.read()
+-            for group in mapping.keys():
++            for group in list(mapping.keys()):
+                 def mapname(match):
+                     try:
+                         return mapping[group][match.group(0)]
+@@ -2069,7 +2070,7 @@
+             if self.fixsound:
+                 ignore_classes.append(self.fixsound)
+         trgclasses = []
+-        for key in md5reobtable.keys():
++        for key in list(md5reobtable.keys()):
+             if key in ignore_classes:
+                 continue
+             if key not in md5table:
+@@ -2078,7 +2079,7 @@
+                 mainname = os.path.basename(key).split('$')[0]
+                 
+                 # We recheck all the key to see if their main class is equivalent. If it is, we append the class to the marked classes
+-                for subkey in md5reobtable.keys():
++                for subkey in list(md5reobtable.keys()):
+                     subclassname = os.path.basename(subkey).split('$')[0]
+                     if subclassname == mainname and not subkey in trgclasses:
+                         trgclasses.append(subkey)
+@@ -2089,7 +2090,7 @@
+                 mainname = os.path.basename(key).split('$')[0]
+                 
+                 # We recheck all the key to see if their main class is equivalent. If it is, we append the class to the marked classes
+-                for subkey in md5reobtable.keys():
++                for subkey in list(md5reobtable.keys()):
+                     subclassname = os.path.basename(subkey).split('$')[0]
+                     if subclassname == mainname and not subkey in trgclasses:
+                         trgclasses.append(subkey)
+@@ -2172,24 +2173,24 @@
+                 self.logger.info('File tagged for deletion : %s', entry[0])
+ 
+         if 'CHANGELOG' in [i[0] for i in newfiles]:
+-            print ''
++            print('')
+             self.logger.info('== CHANGELOG ==')
+             changelog_url = self.updateurl + 'mcp/CHANGELOG'
+-            changelog = urllib.urlopen(changelog_url).readlines()
++            changelog = urllib.request.urlopen(changelog_url).readlines()
+             for line in changelog:
+                 self.logger.info(line.strip())
+                 if not line.strip():
+                     break
+-            print ''
+-            print ''
++            print('')
++            print('')
+ 
+         if not force:
+-            print 'WARNING:'
+-            print 'You are going to update MCP'
+-            print 'Are you sure you want to continue ?'
+-            answer = raw_input('If you really want to update, enter "Yes" ')
++            print('WARNING:')
++            print('You are going to update MCP')
++            print('Are you sure you want to continue ?')
++            answer = input('If you really want to update, enter "Yes" ')
+             if answer.lower() not in ['yes', 'y']:
+-                print 'You have not entered "Yes", aborting the update process'
++                print('You have not entered "Yes", aborting the update process')
+                 sys.exit(1)
+ 
+         for entry in newfiles:
+@@ -2203,7 +2204,7 @@
+                     except OSError:
+                         pass
+                 file_url = self.updateurl + 'mcp/' + entry[0]
+-                urllib.urlretrieve(file_url, cur_file)
++                urllib.request.urlretrieve(file_url, cur_file)
+             elif entry[3] == 'D':
+                 self.logger.info('Removing file from local install : %s', entry[0])
+                 # Remove file here
+@@ -2228,13 +2229,13 @@
+                 if len(row) == 2:
+                     md5reobtable[row[0]] = row[1]
+         trgclasses = []
+-        for key in md5reobtable.keys():
++        for key in list(md5reobtable.keys()):
+             if key not in md5table:
+                 # We get the classname by splitting the path first than splitting on '$'
+                 mainname = os.path.basename(key).split('$')[0]
+                 
+                 # We recheck all the key to see if their main class is equivalent. If it is, we append the class to the marked classes
+-                for subkey in md5reobtable.keys():
++                for subkey in list(md5reobtable.keys()):
+                     subclassname = os.path.basename(subkey).split('$')[0]
+                     if subclassname == mainname and not subkey in trgclasses:
+                         trgclasses.append(subkey)
+@@ -2244,7 +2245,7 @@
+                 mainname = os.path.basename(key).split('$')[0]
+                 
+                 # We recheck all the key to see if their main class is equivalent. If it is, we append the class to the marked classes
+-                for subkey in md5reobtable.keys():
++                for subkey in list(md5reobtable.keys()):
+                     subclassname = os.path.basename(subkey).split('$')[0]
+                     if subclassname == mainname and not subkey in trgclasses:
+                         trgclasses.append(subkey)
+@@ -2287,9 +2288,9 @@
+             reob = self.loadsrg(reobsrg[side], reverse=False)
+             out = {'CL:': {}, 'MD:': {}, 'FD:': {}, 'PK:': {}}
+             
+-            for type,de in deob.items():
++            for type,de in list(deob.items()):
+                 re = reob[type]
+-                out[type] = dict([[k,re[v]] for k,v in de.items()])
++                out[type] = dict([[k,re[v]] for k,v in list(de.items())])
+             
+             if os.path.isfile(targsrg[side]):
+                 os.remove(targsrg[side])
+@@ -2319,6 +2320,6 @@
+                 assert 'Unknown type %s' % line
+ 
+         if reverse:
+-            for type,map in srg.items():
+-                srg[type] = dict([[v,k] for k,v in map.items()])
++            for type,map in list(srg.items()):
++                srg[type] = dict([[v,k] for k,v in list(map.items())])
+         return srg

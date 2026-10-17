@@ -1,0 +1,30 @@
+--- a/net/minecraft/tileentity/TileEntityHopper.java
++++ b/net/minecraft/tileentity/TileEntityHopper.java
+@@ -28,6 +28,10 @@
+     private ItemStack[] inventory = new ItemStack[5];
+     private String customName;
+     private int transferCooldown = -1;
++    private IInventory cachedOutputInventory = null;
++    private int outputCacheValidTick = -1;
++    private IInventory cachedInputInventory = null;
++    private int inputCacheValidTick = -1;
+ 
+     public void readFromNBT(NBTTagCompound compound)
+     {
+@@ -551,8 +555,15 @@
+ 
+     private IInventory getInventoryForHopperTransfer()
+     {
++        int tick = this.worldObj != null ? (int)(this.worldObj.getTotalWorldTime() & 0x7FFFFFFF) : 0;
++        if (this.cachedOutputInventory != null && tick - this.outputCacheValidTick < 20)
++        {
++            return this.cachedOutputInventory;
++        }
+         EnumFacing enumfacing = BlockHopper.getFacing(this.getBlockMetadata());
+-        return getInventoryAtPosition(this.getWorld(), (double)(this.pos.getX() + enumfacing.getFrontOffsetX()), (double)(this.pos.getY() + enumfacing.getFrontOffsetY()), (double)(this.pos.getZ() + enumfacing.getFrontOffsetZ()));
++        this.cachedOutputInventory = getInventoryAtPosition(this.getWorld(), (double)(this.pos.getX() + enumfacing.getFrontOffsetX()), (double)(this.pos.getY() + enumfacing.getFrontOffsetY()), (double)(this.pos.getZ() + enumfacing.getFrontOffsetZ()));
++        this.outputCacheValidTick = tick;
++        return this.cachedOutputInventory;
+     }
+ 
+     public static IInventory getHopperInventory(IHopper hopper)

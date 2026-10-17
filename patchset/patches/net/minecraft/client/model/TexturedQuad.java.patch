@@ -1,0 +1,148 @@
+--- a/net/minecraft/client/model/TexturedQuad.java
++++ b/net/minecraft/client/model/TexturedQuad.java
+@@ -10,6 +10,11 @@
+     public PositionTextureVertex[] vertexPositions;
+     public int nVertices;
+     private boolean invertNormal;
++    // Object-space face normal, cached: the quad's vertex positions never change after
++    // construction (flipFace only reorders, which is why it re-dirties this). Recomputing
++    // it per frame cost 3 Vec3 allocations + cross + normalize per quad per entity.
++    private float objNx, objNy, objNz;
++    private boolean normalComputed;
+ 
+     public TexturedQuad(PositionTextureVertex[] vertices)
+     {
+@@ -38,16 +43,43 @@
+         }
+ 
+         this.vertexPositions = apositiontexturevertex;
++        this.normalComputed = false;
++    }
++
++    private void computeNormal()
++    {
++        Vec3 vec3 = this.vertexPositions[1].vector3D.subtractReverse(this.vertexPositions[0].vector3D);
++        Vec3 vec31 = this.vertexPositions[1].vector3D.subtractReverse(this.vertexPositions[2].vector3D);
++        Vec3 vec32 = vec31.crossProduct(vec3).normalize();
++        this.objNx = (float)vec32.xCoord;
++        this.objNy = (float)vec32.yCoord;
++        this.objNz = (float)vec32.zCoord;
++        this.normalComputed = true;
+     }
+ 
+     public void draw(WorldRenderer renderer, float scale)
+     {
+-        Vec3 vec3 = this.vertexPositions[1].vector3D.subtractReverse(this.vertexPositions[0].vector3D);
+-        Vec3 vec31 = this.vertexPositions[1].vector3D.subtractReverse(this.vertexPositions[2].vector3D);
+-        Vec3 vec32 = vec31.crossProduct(vec3).normalize();
+-        float f = (float)vec32.xCoord;
+-        float f1 = (float)vec32.yCoord;
+-        float f2 = (float)vec32.zCoord;
++        renderer.begin(7, DefaultVertexFormats.OLDMODEL_POSITION_TEX_NORMAL);
++
++        this.emit(renderer, scale);
++        Tessellator.getInstance().draw();
++    }
++
++    /**
++     * Emit this quad's 4 vertices into an already-begun WorldRenderer (mode 7).
++     * Lets a whole ModelRenderer (all its cubes/quads share one transform, texture
++     * and format) batch into a single draw instead of one draw call per quad.
++     */
++    public void emit(WorldRenderer renderer, float scale)
++    {
++        if (!this.normalComputed)
++        {
++            this.computeNormal();
++        }
++
++        float f = this.objNx;
++        float f1 = this.objNy;
++        float f2 = this.objNz;
+ 
+         if (this.invertNormal)
+         {
+@@ -56,14 +88,80 @@
+             f2 = -f2;
+         }
+ 
+-        renderer.begin(7, DefaultVertexFormats.OLDMODEL_POSITION_TEX_NORMAL);
+-
+         for (int i = 0; i < 4; ++i)
+         {
+             PositionTextureVertex positiontexturevertex = this.vertexPositions[i];
+             renderer.pos(positiontexturevertex.vector3D.xCoord * (double)scale, positiontexturevertex.vector3D.yCoord * (double)scale, positiontexturevertex.vector3D.zCoord * (double)scale).tex((double)positiontexturevertex.texturePositionX, (double)positiontexturevertex.texturePositionY).normal(f, f1, f2).endVertex();
+         }
++    }
+ 
+-        Tessellator.getInstance().draw();
++    /**
++     * Like {@link #emit} but bakes the modelview matrix into each position so the
++     * quad can be drawn in a shared batch under an identity modelview. The normal is
++     * ALSO transformed into eye space by the modelview's rotation, so the entity light
++     * directions (which {@link net.minecraft.client.renderer.GlStateManager#setLightPosition}
++     * stores in eye space) and the normal live in the same space. Leaving the normal in
++     * object space made entity.vsh compute dot(object_normal, eye_light) — entities came out
++     * too dark and with reversed directional shading because the camera/facing/part rotations
++     * were missing from the normal.
++     */
++    public void emitTransformed(WorldRenderer renderer, float scale, plutonium.gpu.math.Matrix4f mv)
++    {
++        if (!this.normalComputed)
++        {
++            this.computeNormal();
++        }
++
++        float f = this.objNx;
++        float f1 = this.objNy;
++        float f2 = this.objNz;
++
++        if (this.invertNormal)
++        {
++            f = -f;
++            f1 = -f1;
++            f2 = -f2;
++        }
++
++        // Rotate the object-space normal into eye space by the modelview's upper 3x3, the
++        // same transform setLightPosition applies to the light directions. (Models use rotation
++        // + uniform scale, so the upper 3x3 is fine — the vertex shader normalizes.)
++        float nx = mv.m00 * f + mv.m10 * f1 + mv.m20 * f2;
++        float ny = mv.m01 * f + mv.m11 * f1 + mv.m21 * f2;
++        float nz = mv.m02 * f + mv.m12 * f1 + mv.m22 * f2;
++        byte bnx = (byte)((int)(nx * 127.0F) & 255);
++        byte bny = (byte)((int)(ny * 127.0F) & 255);
++        byte bnz = (byte)((int)(nz * 127.0F) & 255);
++
++        // eye = mv * (lx,ly,lz,1) per vertex; modelview is affine so w stays 1. Emitted
++        // pre-triangulated (the batch runs in mode 4) so the uploader's quadsToTriangles copy
++        // pass is skipped. This path only runs with shaders OFF (ModelBatch is gated on
++        // !Config.isShaders()), so no SVertexBuilder bookkeeping is skipped.
++        PositionTextureVertex v0 = this.vertexPositions[0];
++        PositionTextureVertex v1 = this.vertexPositions[1];
++        PositionTextureVertex v2 = this.vertexPositions[2];
++        PositionTextureVertex v3 = this.vertexPositions[3];
++        float x0 = (float)(v0.vector3D.xCoord * (double)scale), y0 = (float)(v0.vector3D.yCoord * (double)scale), z0 = (float)(v0.vector3D.zCoord * (double)scale);
++        float x1 = (float)(v1.vector3D.xCoord * (double)scale), y1 = (float)(v1.vector3D.yCoord * (double)scale), z1 = (float)(v1.vector3D.zCoord * (double)scale);
++        float x2 = (float)(v2.vector3D.xCoord * (double)scale), y2 = (float)(v2.vector3D.yCoord * (double)scale), z2 = (float)(v2.vector3D.zCoord * (double)scale);
++        float x3 = (float)(v3.vector3D.xCoord * (double)scale), y3 = (float)(v3.vector3D.yCoord * (double)scale), z3 = (float)(v3.vector3D.zCoord * (double)scale);
++        renderer.putModelTriangles(
++            mv.m00 * x0 + mv.m10 * y0 + mv.m20 * z0 + mv.m30,
++            mv.m01 * x0 + mv.m11 * y0 + mv.m21 * z0 + mv.m31,
++            mv.m02 * x0 + mv.m12 * y0 + mv.m22 * z0 + mv.m32,
++            v0.texturePositionX, v0.texturePositionY,
++            mv.m00 * x1 + mv.m10 * y1 + mv.m20 * z1 + mv.m30,
++            mv.m01 * x1 + mv.m11 * y1 + mv.m21 * z1 + mv.m31,
++            mv.m02 * x1 + mv.m12 * y1 + mv.m22 * z1 + mv.m32,
++            v1.texturePositionX, v1.texturePositionY,
++            mv.m00 * x2 + mv.m10 * y2 + mv.m20 * z2 + mv.m30,
++            mv.m01 * x2 + mv.m11 * y2 + mv.m21 * z2 + mv.m31,
++            mv.m02 * x2 + mv.m12 * y2 + mv.m22 * z2 + mv.m32,
++            v2.texturePositionX, v2.texturePositionY,
++            mv.m00 * x3 + mv.m10 * y3 + mv.m20 * z3 + mv.m30,
++            mv.m01 * x3 + mv.m11 * y3 + mv.m21 * z3 + mv.m31,
++            mv.m02 * x3 + mv.m12 * y3 + mv.m22 * z3 + mv.m32,
++            v3.texturePositionX, v3.texturePositionY,
++            bnx, bny, bnz);
+     }
+ }

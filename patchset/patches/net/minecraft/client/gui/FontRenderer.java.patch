@@ -1,0 +1,236 @@
+--- a/net/minecraft/client/gui/FontRenderer.java
++++ b/net/minecraft/client/gui/FontRenderer.java
+@@ -22,7 +22,6 @@
+ import net.minecraft.client.settings.GameSettings;
+ import net.minecraft.util.ResourceLocation;
+ import org.apache.commons.io.IOUtils;
+-import org.lwjgl.opengl.GL11;
+ 
+ public class FontRenderer implements IResourceManagerReloadListener
+ {
+@@ -38,10 +37,16 @@
+     private float posY;
+     private boolean unicodeFlag;
+     private boolean bidiFlag;
++    // Base colour of the string being drawn (set per renderString call).
+     private float red;
++    private float green;
+     private float blue;
+-    private float green;
+     private float alpha;
++    // Current glyph colour: the base colour, or the last § colour code. Glyph colour is
++    // per-vertex (see plutonium.gpu.FontBatch), so colour changes don't flush the batch.
++    private float glyphRed;
++    private float glyphGreen;
++    private float glyphBlue;
+     private int textColor;
+     private boolean randomStyle;
+     private boolean boldStyle;
+@@ -94,6 +99,8 @@
+     public void onResourceManagerReload(IResourceManager resourceManager)
+     {
+         this.readFontTexture();
++        // Glyph metrics / page textures changed — recorded layouts are stale.
++        plutonium.gpu.GlyphCache.clear();
+     }
+ 
+     private void readFontTexture()
+@@ -175,6 +182,34 @@
+         }
+     }
+ 
++    /**
++     * Ensure the font page texture is bound and the glyph batch is open for it. Glyphs are
++     * accumulated by {@link plutonium.gpu.FontBatch} (per-vertex colour + modelview baked
++     * into positions) so an entire frame's text — every nametag, scoreboard and chat line,
++     * across colours and positions — collapses into one draw per font page. bindTexture only
++     * changes (and flushes) on an actual page switch; the colour modifier is kept white so it
++     * doesn't double-tint the per-vertex glyph colour.
++     */
++    private void glyphBegin(ResourceLocation tex)
++    {
++        this.renderEngine.bindTexture(tex);
++        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
++        plutonium.gpu.FontBatch.begin(tex);
++    }
++
++    private void glyphFlush()
++    {
++        // Flush the full batch stack in layer order, not the font batch alone: glyphs drawn
++        // now must land ON TOP of any still-pending HUD rects (chip/scoreboard backgrounds).
++        plutonium.gpu.Batches.flushAll();
++    }
++
++    /** Bind a font page + open the glyph batch for {@link plutonium.gpu.GlyphCache} replay. */
++    public void glyphBeginForReplay(ResourceLocation tex)
++    {
++        this.glyphBegin(tex);
++    }
++
+     private float func_181559_a(char p_181559_1_, boolean p_181559_2_)
+     {
+         if (p_181559_1_ == 32)
+@@ -193,19 +228,18 @@
+         int i = p_78266_1_ % 16 * 8;
+         int j = p_78266_1_ / 16 * 8;
+         int k = p_78266_2_ ? 1 : 0;
+-        this.renderEngine.bindTexture(this.locationFontTexture);
+         int l = this.charWidth[p_78266_1_];
+         float f = (float)l - 0.01F;
+-        GL11.glBegin(GL11.GL_TRIANGLE_STRIP);
+-        GL11.glTexCoord2f((float)i / 128.0F, (float)j / 128.0F);
+-        GL11.glVertex3f(this.posX + (float)k, this.posY, 0.0F);
+-        GL11.glTexCoord2f((float)i / 128.0F, ((float)j + 7.99F) / 128.0F);
+-        GL11.glVertex3f(this.posX - (float)k, this.posY + 7.99F, 0.0F);
+-        GL11.glTexCoord2f(((float)i + f - 1.0F) / 128.0F, (float)j / 128.0F);
+-        GL11.glVertex3f(this.posX + f - 1.0F + (float)k, this.posY, 0.0F);
+-        GL11.glTexCoord2f(((float)i + f - 1.0F) / 128.0F, ((float)j + 7.99F) / 128.0F);
+-        GL11.glVertex3f(this.posX + f - 1.0F - (float)k, this.posY + 7.99F, 0.0F);
+-        GL11.glEnd();
++        this.glyphBegin(this.locationFontTexture);
++        float u0 = (float)i / 128.0F, v0 = (float)j / 128.0F;
++        float u1 = ((float)i + f - 1.0F) / 128.0F, v1 = ((float)j + 7.99F) / 128.0F;
++        // Mode-7 quad order (TL, BL, BR, TR).
++        plutonium.gpu.FontBatch.glyph(
++            this.posX + (float)k, this.posY, u0, v0,
++            this.posX - (float)k, this.posY + 7.99F, u0, v1,
++            this.posX + f - 1.0F - (float)k, this.posY + 7.99F, u1, v1,
++            this.posX + f - 1.0F + (float)k, this.posY, u1, v0,
++            this.glyphRed, this.glyphGreen, this.glyphBlue, this.alpha);
+         return (float)l;
+     }
+ 
+@@ -219,11 +253,6 @@
+         return unicodePageLocations[p_111271_1_];
+     }
+ 
+-    private void loadGlyphTexture(int p_78257_1_)
+-    {
+-        this.renderEngine.bindTexture(this.getUnicodePageLocation(p_78257_1_));
+-    }
+-
+     private float renderUnicodeChar(char p_78277_1_, boolean p_78277_2_)
+     {
+         if (this.glyphWidth[p_78277_1_] == 0)
+@@ -233,7 +262,7 @@
+         else
+         {
+             int i = p_78277_1_ / 256;
+-            this.loadGlyphTexture(i);
++            // texture bound lazily by glyphBegin() below (keeps the batch intact)
+             int j = this.glyphWidth[p_78277_1_] >>> 4;
+             int k = this.glyphWidth[p_78277_1_] & 15;
+             float f = (float)j;
+@@ -242,16 +271,14 @@
+             float f3 = (float)((p_78277_1_ & 255) / 16 * 16);
+             float f4 = f1 - f - 0.02F;
+             float f5 = p_78277_2_ ? 1.0F : 0.0F;
+-            GL11.glBegin(GL11.GL_TRIANGLE_STRIP);
+-            GL11.glTexCoord2f(f2 / 256.0F, f3 / 256.0F);
+-            GL11.glVertex3f(this.posX + f5, this.posY, 0.0F);
+-            GL11.glTexCoord2f(f2 / 256.0F, (f3 + 15.98F) / 256.0F);
+-            GL11.glVertex3f(this.posX - f5, this.posY + 7.99F, 0.0F);
+-            GL11.glTexCoord2f((f2 + f4) / 256.0F, f3 / 256.0F);
+-            GL11.glVertex3f(this.posX + f4 / 2.0F + f5, this.posY, 0.0F);
+-            GL11.glTexCoord2f((f2 + f4) / 256.0F, (f3 + 15.98F) / 256.0F);
+-            GL11.glVertex3f(this.posX + f4 / 2.0F - f5, this.posY + 7.99F, 0.0F);
+-            GL11.glEnd();
++            this.glyphBegin(this.getUnicodePageLocation(i));
++            // Mode-7 quad order (TL, BL, BR, TR).
++            plutonium.gpu.FontBatch.glyph(
++                this.posX + f5, this.posY, f2 / 256.0F, f3 / 256.0F,
++                this.posX - f5, this.posY + 7.99F, f2 / 256.0F, (f3 + 15.98F) / 256.0F,
++                this.posX + f4 / 2.0F - f5, this.posY + 7.99F, (f2 + f4) / 256.0F, (f3 + 15.98F) / 256.0F,
++                this.posX + f4 / 2.0F + f5, this.posY, (f2 + f4) / 256.0F, f3 / 256.0F,
++                this.glyphRed, this.glyphGreen, this.glyphBlue, this.alpha);
+             return (f1 - f) / 2.0F + 1.0F;
+         }
+     }
+@@ -338,11 +365,15 @@
+ 
+                     int j1 = this.colorCode[i1];
+                     this.textColor = j1;
+-                    GlStateManager.color((float)(j1 >> 16) / 255.0F, (float)(j1 >> 8 & 255) / 255.0F, (float)(j1 & 255) / 255.0F, this.alpha);
++                    this.glyphRed = (float)(j1 >> 16) / 255.0F;
++                    this.glyphGreen = (float)(j1 >> 8 & 255) / 255.0F;
++                    this.glyphBlue = (float)(j1 & 255) / 255.0F;
+                 }
+                 else if (i1 == 16)
+                 {
+                     this.randomStyle = true;
++                    // Obfuscated text re-randomises every frame — never cache it.
++                    plutonium.gpu.GlyphCache.abortRecord();
+                 }
+                 else if (i1 == 17)
+                 {
+@@ -367,7 +398,9 @@
+                     this.strikethroughStyle = false;
+                     this.underlineStyle = false;
+                     this.italicStyle = false;
+-                    GlStateManager.color(this.red, this.blue, this.green, this.alpha);
++                    this.glyphRed = this.red;
++                    this.glyphGreen = this.green;
++                    this.glyphBlue = this.blue;
+                 }
+ 
+                 ++i;
+@@ -432,6 +465,16 @@
+                     }
+ 
+                     ++f;
++                }
++
++                if (this.strikethroughStyle || this.underlineStyle)
++                {
++                    // Line decorations draw via immediate Tessellator quads, not glyphs — the
++                    // cache can't replay them, so don't cache strings that use them. They use
++                    // POSITION (uniform colour), so colour the line explicitly.
++                    plutonium.gpu.GlyphCache.abortRecord();
++                    this.glyphFlush();
++                    GlStateManager.color(this.glyphRed, this.glyphGreen, this.glyphBlue, this.alpha);
+                 }
+ 
+                 if (this.strikethroughStyle)
+@@ -503,13 +546,39 @@
+             }
+ 
+             this.red = (float)(color >> 16 & 255) / 255.0F;
+-            this.blue = (float)(color >> 8 & 255) / 255.0F;
+-            this.green = (float)(color & 255) / 255.0F;
++            this.green = (float)(color >> 8 & 255) / 255.0F;
++            this.blue = (float)(color & 255) / 255.0F;
+             this.alpha = (float)(color >> 24 & 255) / 255.0F;
+-            GlStateManager.color(this.red, this.blue, this.green, this.alpha);
++            this.glyphRed = this.red;
++            this.glyphGreen = this.green;
++            this.glyphBlue = this.blue;
+             this.posX = x;
+             this.posY = y;
++            // Glyph-layout cache: replay a previously recorded layout of this exact string
++            // (re-tinted with this call's colour), or record this render for next time.
++            String cacheKey = null;
++
++            if (plutonium.gpu.GlyphCache.ENABLED)
++            {
++                cacheKey = plutonium.gpu.GlyphCache.key(this, text, dropShadow, this.unicodeFlag);
++                float adv = plutonium.gpu.GlyphCache.replay(this, cacheKey, x, y, this.red, this.green, this.blue, this.alpha);
++
++                if (!Float.isNaN(adv))
++                {
++                    this.posX = x + adv;
++                    return (int)this.posX;
++                }
++
++                plutonium.gpu.GlyphCache.beginRecord(cacheKey, x, y, this.red, this.green, this.blue);
++            }
++
+             this.renderStringAtPos(text, dropShadow);
++
++            if (cacheKey != null)
++            {
++                plutonium.gpu.GlyphCache.endRecord(this.posX - x);
++            }
++
+             return (int)this.posX;
+         }
+     }

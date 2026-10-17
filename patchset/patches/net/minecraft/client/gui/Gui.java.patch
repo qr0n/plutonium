@@ -1,0 +1,47 @@
+--- a/net/minecraft/client/gui/Gui.java
++++ b/net/minecraft/client/gui/Gui.java
+@@ -52,6 +52,12 @@
+             int j = top;
+             top = bottom;
+             bottom = j;
++        }
++
++        if (plutonium.gpu.RectBatch.ENABLED && plutonium.gpu.Batches.guiBatchingActive())
++        {
++            plutonium.gpu.RectBatch.rect((float)left, (float)top, (float)right, (float)bottom, color);
++            return;
+         }
+ 
+         float f3 = (float)(color >> 24 & 255) / 255.0F;
+@@ -117,6 +123,15 @@
+     {
+         float f = 0.00390625F;
+         float f1 = 0.00390625F;
++        if (plutonium.gpu.GuiQuadBatch.ENABLED && plutonium.gpu.Batches.guiBatchingActive())
++        {
++            plutonium.gpu.GuiQuadBatch.quad(
++                x + 0, y + height, (textureX + 0) * f, (textureY + height) * f1,
++                x + width, y + height, (textureX + width) * f, (textureY + height) * f1,
++                x + width, y + 0, (textureX + width) * f, (textureY + 0) * f1,
++                x + 0, y + 0, (textureX + 0) * f, (textureY + 0) * f1, this.zLevel);
++            return;
++        }
+         Tessellator tessellator = Tessellator.getInstance();
+         WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+         worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX);
+@@ -131,6 +146,15 @@
+     {
+         float f = 0.00390625F;
+         float f1 = 0.00390625F;
++        if (plutonium.gpu.GuiQuadBatch.ENABLED && plutonium.gpu.Batches.guiBatchingActive())
++        {
++            plutonium.gpu.GuiQuadBatch.quad(
++                xCoord + 0.0F, yCoord + maxV, (minU + 0) * f, (minV + maxV) * f1,
++                xCoord + maxU, yCoord + maxV, (minU + maxU) * f, (minV + maxV) * f1,
++                xCoord + maxU, yCoord + 0.0F, (minU + maxU) * f, (minV + 0) * f1,
++                xCoord + 0.0F, yCoord + 0.0F, (minU + 0) * f, (minV + 0) * f1, this.zLevel);
++            return;
++        }
+         Tessellator tessellator = Tessellator.getInstance();
+         WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+         worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX);

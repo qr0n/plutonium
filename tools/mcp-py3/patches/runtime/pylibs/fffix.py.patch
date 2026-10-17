@@ -1,0 +1,43 @@
+--- a/runtime/pylibs/fffix.py
++++ b/runtime/pylibs/fffix.py
+@@ -7,11 +7,12 @@
+ @version: v7.0
+ """
+ 
++from py2compat import open
+ import sys
+ import os
+ import fnmatch
+ import shutil
+-import re
++import py2re as re
+ import zipfile
+ import time
+ from contextlib import closing
+@@ -193,7 +194,7 @@
+         for info in zip.filelist:
+             data = zip.read(info.filename)
+             if info.filename.endswith('.java'):
+-                print(info.filename)
++                print((info.filename))
+                 data = _process_data(data, os.path.splitext(os.path.basename(info.filename))[0])
+             else:
+               continue
+@@ -382,7 +383,7 @@
+     elif len(args) == 2:
+         fffix_zip_dir(args[0], args[1])
+     else:
+-        print >> sys.stderr, 'src_dir required'
++        print('src_dir required', file=sys.stderr)
+         sys.exit(1)
+ 
+ def rmtree_filter(path, whitelist):
+@@ -390,7 +391,7 @@
+       for file in files:
+           tmp = os.path.join(root, file).replace('\\', '/')
+           if not tmp in whitelist:
+-              print 'Removing: ' + tmp
++              print('Removing: ' + tmp)
+               os.remove(tmp)
+       
+       for dir in dirs:

@@ -1,0 +1,22 @@
+--- a/net/minecraft/entity/Entity.java
++++ b/net/minecraft/entity/Entity.java
+@@ -1030,15 +1030,17 @@
+         }
+     }
+ 
++    private final BlockPos.MutableBlockPos brightnessBlockPos = new BlockPos.MutableBlockPos();
++
+     public int getBrightnessForRender(float partialTicks)
+     {
+-        BlockPos blockpos = new BlockPos(this.posX, this.posY + (double)this.getEyeHeight(), this.posZ);
++        BlockPos blockpos = this.brightnessBlockPos.func_181079_c(MathHelper.floor_double(this.posX), MathHelper.floor_double(this.posY + (double)this.getEyeHeight()), MathHelper.floor_double(this.posZ));
+         return this.worldObj.isBlockLoaded(blockpos) ? this.worldObj.getCombinedLight(blockpos, 0) : 0;
+     }
+ 
+     public float getBrightness(float partialTicks)
+     {
+-        BlockPos blockpos = new BlockPos(this.posX, this.posY + (double)this.getEyeHeight(), this.posZ);
++        BlockPos blockpos = this.brightnessBlockPos.func_181079_c(MathHelper.floor_double(this.posX), MathHelper.floor_double(this.posY + (double)this.getEyeHeight()), MathHelper.floor_double(this.posZ));
+         return this.worldObj.isBlockLoaded(blockpos) ? this.worldObj.getLightBrightness(blockpos) : 0.0F;
+     }
+ 

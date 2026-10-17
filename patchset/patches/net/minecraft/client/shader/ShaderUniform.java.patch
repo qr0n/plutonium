@@ -1,0 +1,11 @@
+--- a/net/minecraft/client/shader/ShaderUniform.java
++++ b/net/minecraft/client/shader/ShaderUniform.java
+@@ -6,7 +6,7 @@
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+ import org.lwjgl.BufferUtils;
+-import org.lwjgl.util.vector.Matrix4f;
++import plutonium.gpu.math.Matrix4f;
+ 
+ public class ShaderUniform
+ {

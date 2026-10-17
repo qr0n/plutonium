@@ -1,0 +1,318 @@
+--- a/net/minecraft/client/renderer/RenderGlobal.java
++++ b/net/minecraft/client/renderer/RenderGlobal.java
+@@ -82,9 +82,8 @@
+ import net.minecraft.world.chunk.Chunk;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.opengl.GL11;
+-import org.lwjgl.util.vector.Vector3f;
+-import org.lwjgl.util.vector.Vector4f;
++import plutonium.gpu.math.Vector3f;
++import plutonium.gpu.math.Vector4f;
+ 
+ public class RenderGlobal implements IWorldAccess, IResourceManagerReloadListener
+ {
+@@ -150,8 +149,8 @@
+         this.renderManager = mcIn.getRenderManager();
+         this.renderEngine = mcIn.getTextureManager();
+         this.renderEngine.bindTexture(locationForcefieldPng);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
++        GlStateManager.glTexParameteri(3553, 10242, 10497);
++        GlStateManager.glTexParameteri(3553, 10243, 10497);
+         GlStateManager.bindTexture(0);
+         this.updateDestroyBlockIcons();
+         this.vboEnabled = OpenGlHelper.useVbo();
+@@ -263,16 +262,20 @@
+             this.sky2VBO = new VertexBuffer(this.vertexBufferFormat);
+             this.renderSky(worldrenderer, -16.0F, true);
+             worldrenderer.finishDrawing();
++            // Core profile: GL_QUADS is gone — triangulate like VertexBufferUploader does
++            // for chunks, and bake the real draw mode into the VBO.
++            if (worldrenderer.getDrawMode() == 7) worldrenderer.quadsToTriangles();
++            this.sky2VBO.setDrawMode(worldrenderer.getDrawMode());
++            this.sky2VBO.func_181722_a(worldrenderer.getByteBuffer());
+             worldrenderer.reset();
+-            this.sky2VBO.func_181722_a(worldrenderer.getByteBuffer());
+         }
+         else
+         {
+             this.glSkyList2 = GLAllocation.generateDisplayLists(1);
+-            GL11.glNewList(this.glSkyList2, GL11.GL_COMPILE);
++            // glNewList removed (core profile)
+             this.renderSky(worldrenderer, -16.0F, true);
+             tessellator.draw();
+-            GL11.glEndList();
++            // glEndList removed (core profile)
+         }
+     }
+ 
+@@ -297,16 +300,20 @@
+             this.skyVBO = new VertexBuffer(this.vertexBufferFormat);
+             this.renderSky(worldrenderer, 16.0F, false);
+             worldrenderer.finishDrawing();
++            // Core profile: GL_QUADS is gone — triangulate like VertexBufferUploader does
++            // for chunks, and bake the real draw mode into the VBO.
++            if (worldrenderer.getDrawMode() == 7) worldrenderer.quadsToTriangles();
++            this.skyVBO.setDrawMode(worldrenderer.getDrawMode());
++            this.skyVBO.func_181722_a(worldrenderer.getByteBuffer());
+             worldrenderer.reset();
+-            this.skyVBO.func_181722_a(worldrenderer.getByteBuffer());
+         }
+         else
+         {
+             this.glSkyList = GLAllocation.generateDisplayLists(1);
+-            GL11.glNewList(this.glSkyList, GL11.GL_COMPILE);
++            // glNewList removed (core profile)
+             this.renderSky(worldrenderer, 16.0F, false);
+             tessellator.draw();
+-            GL11.glEndList();
++            // glEndList removed (core profile)
+         }
+     }
+ 
+@@ -358,17 +365,21 @@
+             this.starVBO = new VertexBuffer(this.vertexBufferFormat);
+             this.renderStars(worldrenderer);
+             worldrenderer.finishDrawing();
++            // Core profile: GL_QUADS is gone — triangulate like VertexBufferUploader does
++            // for chunks, and bake the real draw mode into the VBO.
++            if (worldrenderer.getDrawMode() == 7) worldrenderer.quadsToTriangles();
++            this.starVBO.setDrawMode(worldrenderer.getDrawMode());
++            this.starVBO.func_181722_a(worldrenderer.getByteBuffer());
+             worldrenderer.reset();
+-            this.starVBO.func_181722_a(worldrenderer.getByteBuffer());
+         }
+         else
+         {
+             this.starGLCallList = GLAllocation.generateDisplayLists(1);
+             GlStateManager.pushMatrix();
+-            GL11.glNewList(this.starGLCallList, GL11.GL_COMPILE);
++            // glNewList removed (core profile)
+             this.renderStars(worldrenderer);
+             tessellator.draw();
+-            GL11.glEndList();
++            // glEndList removed (core profile)
+             GlStateManager.popMatrix();
+         }
+     }
+@@ -528,6 +539,12 @@
+         }
+         else
+         {
++            // Arrow/item quads emitted anywhere inside this pass may defer to the
++            // pre-renderHand batch flush (same projection). try/finally so an entity
++            // render crash can't leave the gate stuck open.
++            plutonium.gpu.Batches.entityPassActive = true;
++            try
++            {
+             double d0 = renderViewEntity.prevPosX + (renderViewEntity.posX - renderViewEntity.prevPosX) * (double)partialTicks;
+             double d1 = renderViewEntity.prevPosY + (renderViewEntity.posY - renderViewEntity.prevPosY) * (double)partialTicks;
+             double d2 = renderViewEntity.prevPosZ + (renderViewEntity.posZ - renderViewEntity.prevPosZ) * (double)partialTicks;
+@@ -571,11 +588,14 @@
+                 RenderHelper.disableStandardItemLighting();
+                 this.renderManager.setRenderOutlines(true);
+ 
+-                for (int j = 0; j < list.size(); ++j)
++                boolean flag = this.mc.getRenderViewEntity() instanceof EntityLivingBase && ((EntityLivingBase)this.mc.getRenderViewEntity()).isPlayerSleeping();
++                int listSize = list.size();
++
++                for (int j = 0; j < listSize; ++j)
+                 {
+                     Entity entity3 = (Entity)list.get(j);
+-                    boolean flag = this.mc.getRenderViewEntity() instanceof EntityLivingBase && ((EntityLivingBase)this.mc.getRenderViewEntity()).isPlayerSleeping();
+-                    boolean flag1 = entity3.isInRangeToRender3d(d0, d1, d2) && (entity3.ignoreFrustumCheck || camera.isBoundingBoxInFrustum(entity3.getEntityBoundingBox()) || entity3.riddenByEntity == this.mc.thePlayer) && entity3 instanceof EntityPlayer;
++                    if (!(entity3 instanceof EntityPlayer)) continue;
++                    boolean flag1 = entity3.isInRangeToRender3d(d0, d1, d2) && (entity3.ignoreFrustumCheck || camera.isBoundingBoxInFrustum(entity3.getEntityBoundingBox()) || entity3.riddenByEntity == this.mc.thePlayer);
+ 
+                     if ((entity3 != this.mc.getRenderViewEntity() || this.mc.gameSettings.thirdPersonView != 0 || flag) && flag1)
+                     {
+@@ -599,6 +619,8 @@
+             }
+ 
+             this.theWorld.theProfiler.endStartSection("entities");
++            boolean playerSleeping = this.mc.getRenderViewEntity() instanceof EntityLivingBase && ((EntityLivingBase)this.mc.getRenderViewEntity()).isPlayerSleeping();
++            BlockPos.MutableBlockPos renderBlockPos = new BlockPos.MutableBlockPos();
+             label738:
+ 
+             for (RenderGlobal.ContainerLocalRenderInformation renderglobal$containerlocalrenderinformation : this.renderInfos)
+@@ -630,9 +652,25 @@
+                                 break;
+                             }
+ 
+-                            boolean flag3 = this.mc.getRenderViewEntity() instanceof EntityLivingBase ? ((EntityLivingBase)this.mc.getRenderViewEntity()).isPlayerSleeping() : false;
+-
+-                            if ((entity2 != this.mc.getRenderViewEntity() || this.mc.gameSettings.thirdPersonView != 0 || flag3) && (entity2.posY < 0.0D || entity2.posY >= 256.0D || this.theWorld.isBlockLoaded(new BlockPos(entity2))))
++                            if (!(entity2 instanceof EntityPlayer))
++                            {
++                                double edx = entity2.posX - d0;
++                                double edy = entity2.posY - d1;
++                                double edz = entity2.posZ - d2;
++                                double edistSq = edx * edx + edy * edy + edz * edz;
++
++                                if (edistSq > 4096.0D)
++                                {
++                                    break;
++                                }
++
++                                if (edistSq > 1024.0D && (entity2 instanceof net.minecraft.entity.item.EntityItem || entity2 instanceof net.minecraft.entity.item.EntityXPOrb || entity2 instanceof net.minecraft.entity.projectile.EntityArrow))
++                                {
++                                    break;
++                                }
++                            }
++
++                            if ((entity2 != this.mc.getRenderViewEntity() || this.mc.gameSettings.thirdPersonView != 0 || playerSleeping) && (entity2.posY < 0.0D || entity2.posY >= 256.0D || this.theWorld.isBlockLoaded(renderBlockPos.func_181079_c(MathHelper.floor_double(entity2.posX), MathHelper.floor_double(entity2.posY), MathHelper.floor_double(entity2.posZ)))))
+                             {
+                                 ++this.countEntitiesRendered;
+                                 this.renderManager.renderEntitySimple(entity2, partialTicks);
+@@ -659,6 +697,16 @@
+                 {
+                     for (TileEntity tileentity2 : list1)
+                     {
++                        BlockPos tePos = tileentity2.getPos();
++                        double tdx = tePos.getX() + 0.5D - d0;
++                        double tdy = tePos.getY() + 0.5D - d1;
++                        double tdz = tePos.getZ() + 0.5D - d2;
++
++                        if (tdx * tdx + tdy * tdy + tdz * tdz > 4096.0D)
++                        {
++                            continue;
++                        }
++
+                         TileEntityRendererDispatcher.instance.renderTileEntity(tileentity2, partialTicks, -1);
+                     }
+                 }
+@@ -668,6 +716,16 @@
+             {
+                 for (TileEntity tileentity : this.field_181024_n)
+                 {
++                    BlockPos gtePos = tileentity.getPos();
++                    double gtdx = gtePos.getX() + 0.5D - d0;
++                    double gtdy = gtePos.getY() + 0.5D - d1;
++                    double gtdz = gtePos.getZ() + 0.5D - d2;
++
++                    if (gtdx * gtdx + gtdy * gtdy + gtdz * gtdz > 4096.0D)
++                    {
++                        continue;
++                    }
++
+                     TileEntityRendererDispatcher.instance.renderTileEntity(tileentity, partialTicks, -1);
+                 }
+             }
+@@ -706,6 +764,11 @@
+             this.postRenderDamagedBlocks();
+             this.mc.entityRenderer.disableLightmap();
+             this.mc.mcProfiler.endSection();
++            }
++            finally
++            {
++                plutonium.gpu.Batches.entityPassActive = false;
++            }
+         }
+     }
+ 
+@@ -1035,46 +1098,8 @@
+     private void renderBlockLayer(EnumWorldBlockLayer blockLayerIn)
+     {
+         this.mc.entityRenderer.enableLightmap();
+-
+-        if (OpenGlHelper.useVbo())
+-        {
+-            GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+-            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+-            GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+-            OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+-            GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+-            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+-            GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
+-        }
+-
+         this.renderContainer.renderChunkLayer(blockLayerIn);
+-
+-        if (OpenGlHelper.useVbo())
+-        {
+-            for (VertexFormatElement vertexformatelement : DefaultVertexFormats.BLOCK.getElements())
+-            {
+-                VertexFormatElement.EnumUsage vertexformatelement$enumusage = vertexformatelement.getUsage();
+-                int i = vertexformatelement.getIndex();
+-
+-                switch (vertexformatelement$enumusage)
+-                {
+-                    case POSITION:
+-                        GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
+-                        break;
+-
+-                    case UV:
+-                        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit + i);
+-                        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+-                        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+-                        break;
+-
+-                    case COLOR:
+-                        GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
+-                        GlStateManager.resetColor();
+-                }
+-            }
+-        }
+-
++        GlStateManager.resetColor();
+         this.mc.entityRenderer.disableLightmap();
+     }
+ 
+@@ -1190,12 +1215,7 @@
+ 
+             if (this.vboEnabled)
+             {
+-                this.skyVBO.bindBuffer();
+-                GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+-                GL11.glVertexPointer(3, GL11.GL_FLOAT, 12, 0L);
+-                this.skyVBO.drawArrays(7);
+-                this.skyVBO.unbindBuffer();
+-                GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
++                WorldVertexBufferUploader.drawPositionVbo(this.skyVBO);
+             }
+             else
+             {
+@@ -1287,12 +1307,7 @@
+ 
+                 if (this.vboEnabled)
+                 {
+-                    this.starVBO.bindBuffer();
+-                    GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+-                    GL11.glVertexPointer(3, GL11.GL_FLOAT, 12, 0L);
+-                    this.starVBO.drawArrays(7);
+-                    this.starVBO.unbindBuffer();
+-                    GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
++                    WorldVertexBufferUploader.drawPositionVbo(this.starVBO);
+                 }
+                 else
+                 {
+@@ -1316,12 +1331,7 @@
+ 
+                 if (this.vboEnabled)
+                 {
+-                    this.sky2VBO.bindBuffer();
+-                    GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+-                    GL11.glVertexPointer(3, GL11.GL_FLOAT, 12, 0L);
+-                    this.sky2VBO.drawArrays(7);
+-                    this.sky2VBO.unbindBuffer();
+-                    GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
++                    WorldVertexBufferUploader.drawPositionVbo(this.sky2VBO);
+                 }
+                 else
+                 {
+@@ -1827,8 +1837,12 @@
+         {
+             GlStateManager.enableBlend();
+             GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+-            GlStateManager.color(0.0F, 0.0F, 0.0F, 0.4F);
+-            GL11.glLineWidth(2.0F);
++            if (plutonium.module.modules.BlockOutline.isActive()) {
++                plutonium.module.modules.BlockOutline.applyColor();
++            } else {
++                GlStateManager.color(0.0F, 0.0F, 0.0F, 0.4F);
++                // glLineWidth(2.0F): fixed at 1 under Vulkan/Metal
++            }
+             GlStateManager.disableTexture2D();
+             GlStateManager.depthMask(false);
+             float f = 0.002F;

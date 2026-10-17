@@ -1,0 +1,22 @@
+--- a/net/minecraft/client/renderer/tileentity/TileEntityRendererDispatcher.java
++++ b/net/minecraft/client/renderer/tileentity/TileEntityRendererDispatcher.java
+@@ -99,6 +99,8 @@
+     {
+         if (tileentityIn.getDistanceSq(this.entityX, this.entityY, this.entityZ) < tileentityIn.getMaxRenderDistanceSquared())
+         {
++            long _t0 = System.nanoTime();
++            try {
+             int i = this.worldObj.getCombinedLight(tileentityIn.getPos(), 0);
+             int j = i % 65536;
+             int k = i / 65536;
+@@ -106,6 +108,10 @@
+             GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+             BlockPos blockpos = tileentityIn.getPos();
+             this.renderTileEntityAt(tileentityIn, (double)blockpos.getX() - staticPlayerX, (double)blockpos.getY() - staticPlayerY, (double)blockpos.getZ() - staticPlayerZ, partialTicks, destroyStage);
++            } finally {
++                plutonium.gpu.DrawStats.nsTile += System.nanoTime() - _t0;
++                plutonium.gpu.DrawStats.cTile++;
++            }
+         }
+     }
+ 

@@ -1,0 +1,11 @@
+--- a/net/minecraft/client/renderer/tileentity/RenderItemFrame.java
++++ b/net/minecraft/client/renderer/tileentity/RenderItemFrame.java
+@@ -186,7 +186,7 @@
+                     FontRenderer fontrenderer = this.getFontRendererFromRenderManager();
+                     GlStateManager.pushMatrix();
+                     GlStateManager.translate((float)x + 0.0F, (float)y + entity.height + 0.5F, (float)z);
+-                    GL11.glNormal3f(0.0F, 1.0F, 0.0F);
++                    // glNormal3f removed (core profile)
+                     GlStateManager.rotate(-this.renderManager.playerViewY, 0.0F, 1.0F, 0.0F);
+                     GlStateManager.rotate(this.renderManager.playerViewX, 1.0F, 0.0F, 0.0F);
+                     GlStateManager.scale(-f1, -f1, f1);

@@ -1,0 +1,79 @@
+--- a/net/minecraft/client/gui/inventory/GuiContainerCreative.java
++++ b/net/minecraft/client/gui/inventory/GuiContainerCreative.java
+@@ -29,8 +29,8 @@
+ import net.minecraft.util.EnumChatFormatting;
+ import net.minecraft.util.MathHelper;
+ import net.minecraft.util.ResourceLocation;
+-import org.lwjgl.input.Keyboard;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.KeyboardShim;
++import plutonium.gpu.MouseShim;
+ 
+ public class GuiContainerCreative extends InventoryEffectRenderer
+ {
+@@ -71,6 +71,11 @@
+         boolean flag = clickType == 1;
+         clickType = slotId == -999 && clickType == 0 ? 4 : clickType;
+ 
++        if (!plutonium.module.modules.DropFilter.allowDrop(this.getThrownStack(slotIn, slotId, clickType)))
++        {
++            return;
++        }
++
+         if (slotIn == null && selectedTabIndex != CreativeTabs.tabInventory.getTabIndex() && clickType != 5)
+         {
+             InventoryPlayer inventoryplayer1 = this.mc.thePlayer.inventory;
+@@ -228,6 +233,17 @@
+         }
+     }
+ 
++    protected ItemStack getThrownStack(Slot slotIn, int slotId, int clickType)
++    {
++        // Outside the inventory tab, any click that misses a slot throws the cursor stack
++        if (slotIn == null && selectedTabIndex != CreativeTabs.tabInventory.getTabIndex() && clickType != 5)
++        {
++            return this.mc.thePlayer.inventory.getItemStack();
++        }
++
++        return super.getThrownStack(slotIn, slotId, clickType);
++    }
++
+     protected void updateActivePotionEffects()
+     {
+         int i = this.guiLeft;
+@@ -245,7 +261,7 @@
+         {
+             super.initGui();
+             this.buttonList.clear();
+-            Keyboard.enableRepeatEvents(true);
++            KeyboardShim.enableRepeatEvents(true);
+             this.searchField = new GuiTextField(0, this.fontRendererObj, this.guiLeft + 82, this.guiTop + 6, 89, this.fontRendererObj.FONT_HEIGHT);
+             this.searchField.setMaxStringLength(15);
+             this.searchField.setEnableBackgroundDrawing(false);
+@@ -272,7 +288,7 @@
+             this.mc.thePlayer.inventoryContainer.removeCraftingFromCrafters(this.field_147059_E);
+         }
+ 
+-        Keyboard.enableRepeatEvents(false);
++        KeyboardShim.enableRepeatEvents(false);
+     }
+ 
+     protected void keyTyped(char typedChar, int keyCode) throws IOException
+@@ -503,7 +519,7 @@
+     public void handleMouseInput() throws IOException
+     {
+         super.handleMouseInput();
+-        int i = Mouse.getEventDWheel();
++        int i = MouseShim.getEventDWheel();
+ 
+         if (i != 0 && this.needsScrollBars())
+         {
+@@ -527,7 +543,7 @@
+ 
+     public void drawScreen(int mouseX, int mouseY, float partialTicks)
+     {
+-        boolean flag = Mouse.isButtonDown(0);
++        boolean flag = MouseShim.isButtonDown(0);
+         int i = this.guiLeft;
+         int j = this.guiTop;
+         int k = i + 175;

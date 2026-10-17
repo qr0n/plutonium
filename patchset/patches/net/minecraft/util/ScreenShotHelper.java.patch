@@ -1,0 +1,41 @@
+--- a/net/minecraft/util/ScreenShotHelper.java
++++ b/net/minecraft/util/ScreenShotHelper.java
+@@ -24,6 +24,7 @@
+     private static final DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd_HH.mm.ss");
+     private static IntBuffer pixelBuffer;
+     private static int[] pixelValues;
++    public static File lastSavedFile = null;
+ 
+     public static IChatComponent saveScreenshot(File gameDirectory, int width, int height, Framebuffer buffer)
+     {
+@@ -51,19 +52,11 @@
+                 pixelValues = new int[i];
+             }
+ 
+-            GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
+-            GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
++            // glPixelStorei: uploads are tightly-packed under Vulkan
++            // glPixelStorei: uploads are tightly-packed under Vulkan
+             pixelBuffer.clear();
+ 
+-            if (OpenGlHelper.isFramebufferEnabled())
+-            {
+-                GlStateManager.bindTexture(buffer.framebufferTexture);
+-                GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, (IntBuffer)pixelBuffer);
+-            }
+-            else
+-            {
+-                GL11.glReadPixels(0, 0, width, height, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, (IntBuffer)pixelBuffer);
+-            }
++            plutonium.gpu.vk.VkRenderTargets.readbackColor(buffer.getTarget(), (IntBuffer)pixelBuffer);
+ 
+             pixelBuffer.get(pixelValues);
+             TextureUtil.processPixelValues(pixelValues, width, height);
+@@ -100,6 +93,7 @@
+             }
+ 
+             ImageIO.write(bufferedimage, "png", (File)file2);
++            lastSavedFile = file2;
+             IChatComponent ichatcomponent = new ChatComponentText(file2.getName());
+             ichatcomponent.getChatStyle().setChatClickEvent(new ClickEvent(ClickEvent.Action.OPEN_FILE, file2.getAbsolutePath()));
+             ichatcomponent.getChatStyle().setUnderlined(Boolean.valueOf(true));

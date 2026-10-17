@@ -1,0 +1,11 @@
+--- a/net/minecraft/util/Cartesian.java
++++ b/net/minecraft/util/Cartesian.java
+@@ -70,7 +70,7 @@
+ 
+         public Iterator<T[]> iterator()
+         {
+-            return (Iterator<T[]>)(this.iterables.length <= 0 ? Collections.singletonList((Object[])Cartesian.createArray(this.clazz, 0)).iterator() : new Cartesian.Product.ProductIterator(this.clazz, this.iterables));
++            return (Iterator<T[]>)(Iterator<?>)(this.iterables.length <= 0 ? Collections.singletonList((Object[])Cartesian.createArray(this.clazz, 0)).iterator() : new Cartesian.Product.ProductIterator(this.clazz, this.iterables));
+         }
+ 
+         static class ProductIterator<T> extends UnmodifiableIterator<T[]>

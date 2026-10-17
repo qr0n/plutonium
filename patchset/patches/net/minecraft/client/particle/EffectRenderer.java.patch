@@ -1,0 +1,103 @@
+--- a/net/minecraft/client/particle/EffectRenderer.java
++++ b/net/minecraft/client/particle/EffectRenderer.java
+@@ -112,6 +112,8 @@
+ 
+     public EntityFX spawnEffectParticle(int particleId, double p_178927_2_, double p_178927_4_, double p_178927_6_, double p_178927_8_, double p_178927_10_, double p_178927_12_, int... p_178927_14_)
+     {
++        if (plutonium.module.modules.ParticleMultiplier.isSuppressed()) return null;
++
+         IParticleFactory iparticlefactory = (IParticleFactory)this.particleTypes.get(Integer.valueOf(particleId));
+ 
+         if (iparticlefactory != null)
+@@ -121,6 +123,12 @@
+             if (entityfx != null)
+             {
+                 this.addEffect(entityfx);
++                // Spawn extra copies for ParticleMultiplier
++                int extra = plutonium.module.modules.ParticleMultiplier.getExtraSpawns();
++                for (int _pi = 0; _pi < extra; _pi++) {
++                    EntityFX extra_fx = iparticlefactory.getEntityFX(particleId, this.worldObj, p_178927_2_, p_178927_4_, p_178927_6_, p_178927_8_, p_178927_10_, p_178927_12_, p_178927_14_);
++                    if (extra_fx != null) this.addEffect(extra_fx);
++                }
+                 return entityfx;
+             }
+         }
+@@ -133,7 +141,7 @@
+         int i = effect.getFXLayer();
+         int j = effect.getAlpha() != 1.0F ? 0 : 1;
+ 
+-        if (this.fxLayers[i][j].size() >= 4000)
++                if (this.fxLayers[i][j].size() >= 2000)
+         {
+             this.fxLayers[i][j].remove(0);
+         }
+@@ -173,20 +181,30 @@
+ 
+     private void updateEffectAlphaLayer(List<EntityFX> p_178925_1_)
+     {
+-        List<EntityFX> list = Lists.<EntityFX>newArrayList();
+-
+         for (int i = 0; i < p_178925_1_.size(); ++i)
+         {
++            this.tickParticle((EntityFX)p_178925_1_.get(i));
++        }
++
++        // One compaction pass drops every dead particle at once — removeAll(list) was
++        // O(alive x dead) and at ~2000 rain particles per sublist it snowballed slow frames
++        // into a tick-catchup death spiral.
++        int put = 0;
++
++        for (int i = 0; i < p_178925_1_.size(); ++i)
++        {
+             EntityFX entityfx = (EntityFX)p_178925_1_.get(i);
+-            this.tickParticle(entityfx);
+-
+-            if (entityfx.isDead)
+-            {
+-                list.add(entityfx);
+-            }
+-        }
+-
+-        p_178925_1_.removeAll(list);
++
++            if (!entityfx.isDead)
++            {
++                p_178925_1_.set(put++, entityfx);
++            }
++        }
++
++        for (int i = p_178925_1_.size() - 1; i >= put; --i)
++        {
++            p_178925_1_.remove(i);
++        }
+     }
+ 
+     private void tickParticle(final EntityFX p_178923_1_)
+@@ -266,12 +284,27 @@
+                     WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+                     worldrenderer.begin(7, DefaultVertexFormats.PARTICLE_POSITION_TEX_COLOR_LMAP);
+ 
++                    int particlesRendered = 0;
++
+                     for (int k = 0; k < this.fxLayers[i][j].size(); ++k)
+                     {
+                         final EntityFX entityfx = (EntityFX)this.fxLayers[i][j].get(k);
+ 
+                         try
+                         {
++                                double pdx = entityfx.posX - EntityFX.interpPosX;
++                                double pdy = entityfx.posY - EntityFX.interpPosY;
++                                double pdz = entityfx.posZ - EntityFX.interpPosZ;
++                                if (pdx * pdx + pdy * pdy + pdz * pdz > 1024.0D)
++                                {
++                                    continue;
++                                }
++
++                                if (++particlesRendered > 500)
++                                {
++                                    break;
++                                }
++
+                             entityfx.renderParticle(worldrenderer, entityIn, partialTicks, f, f4, f1, f2, f3);
+                         }
+                         catch (Throwable throwable)

@@ -1,0 +1,176 @@
+--- a/net/minecraft/client/renderer/WorldVertexBufferUploader.java
++++ b/net/minecraft/client/renderer/WorldVertexBufferUploader.java
+@@ -1,88 +1,109 @@
+ package net.minecraft.client.renderer;
+ 
+ import java.nio.ByteBuffer;
+-import java.util.List;
+ import net.minecraft.client.renderer.vertex.VertexFormat;
+ import net.minecraft.client.renderer.vertex.VertexFormatElement;
+-import org.lwjgl.opengl.GL11;
++import plutonium.gpu.CoreShaders;
++import plutonium.gpu.ShaderProgram;
++import plutonium.gpu.vk.VkDrawDispatch;
+ 
+ public class WorldVertexBufferUploader
+ {
+-    @SuppressWarnings("incomplete-switch")
+     public void func_181679_a(WorldRenderer p_181679_1_)
+     {
++        // Any non-batched immediate geometry must come after the pending batches so draw
++        // order (and thus depth/transparency) is preserved. The batches' own flush draws
++        // re-enter here; skip while either is flushing to avoid nested flushes.
++        if (!plutonium.gpu.ModelBatch.flushing && !plutonium.gpu.GuiQuadBatch.flushing
++                && !plutonium.gpu.FontBatch.flushing && !plutonium.gpu.RectBatch.flushing)
++        {
++            plutonium.gpu.Batches.flushAll();
++        }
++
+         if (p_181679_1_.getVertexCount() > 0)
+         {
+-            VertexFormat vertexformat = p_181679_1_.getVertexFormat();
+-            int i = vertexformat.getNextOffset();
+-            ByteBuffer bytebuffer = p_181679_1_.getByteBuffer();
+-            List<VertexFormatElement> list = vertexformat.getElements();
+-
+-            for (int j = 0; j < list.size(); ++j)
++            // Quads → triangles (neither core GL nor Metal/Vulkan draw quads)
++            if (p_181679_1_.getDrawMode() == 7)
+             {
+-                VertexFormatElement vertexformatelement = (VertexFormatElement)list.get(j);
+-                VertexFormatElement.EnumUsage vertexformatelement$enumusage = vertexformatelement.getUsage();
+-                int k = vertexformatelement.getType().getGlConstant();
+-                int l = vertexformatelement.getIndex();
+-                bytebuffer.position(vertexformat.func_181720_d(j));
+-
+-                switch (vertexformatelement$enumusage)
+-                {
+-                    case POSITION:
+-                        GL11.glVertexPointer(vertexformatelement.getElementCount(), k, i, bytebuffer);
+-                        GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+-                        break;
+-
+-                    case UV:
+-                        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit + l);
+-                        GL11.glTexCoordPointer(vertexformatelement.getElementCount(), k, i, bytebuffer);
+-                        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+-                        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+-                        break;
+-
+-                    case COLOR:
+-                        GL11.glColorPointer(vertexformatelement.getElementCount(), k, i, bytebuffer);
+-                        GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
+-                        break;
+-
+-                    case NORMAL:
+-                        GL11.glNormalPointer(k, i, bytebuffer);
+-                        GL11.glEnableClientState(GL11.GL_NORMAL_ARRAY);
+-                }
++                p_181679_1_.quadsToTriangles();
+             }
+ 
+-            GL11.glDrawArrays(p_181679_1_.getDrawMode(), 0, p_181679_1_.getVertexCount());
+-            int i1 = 0;
++            VertexFormat vertexformat = p_181679_1_.getVertexFormat();
++            ByteBuffer bytebuffer = p_181679_1_.getByteBuffer();
++            int drawMode = p_181679_1_.getDrawMode();
++            int vertexCount = p_181679_1_.getVertexCount();
+ 
+-            for (int j1 = list.size(); i1 < j1; ++i1)
+-            {
+-                VertexFormatElement vertexformatelement1 = (VertexFormatElement)list.get(i1);
+-                VertexFormatElement.EnumUsage vertexformatelement$enumusage1 = vertexformatelement1.getUsage();
+-                int k1 = vertexformatelement1.getIndex();
++            ShaderProgram program = selectProgram(vertexformat);
++            program.use();
++            GlStateManager.syncUniforms(program);   // cached uniforms skip unchanged writes
+ 
+-                switch (vertexformatelement$enumusage1)
+-                {
+-                    case POSITION:
+-                        GL11.glDisableClientState(GL11.GL_VERTEX_ARRAY);
+-                        break;
++            bytebuffer.position(0);
++            bytebuffer.limit(vertexCount * vertexformat.getNextOffset());
++            VkDrawDispatch.draw(vertexformat, bytebuffer, drawMode, vertexCount);
+ 
+-                    case UV:
+-                        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit + k1);
+-                        GL11.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+-                        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+-                        break;
++            if (program == CoreShaders.getEntity()) plutonium.gpu.DrawStats.entity++;
++            else if (plutonium.gpu.DrawStats.inGui) plutonium.gpu.DrawStats.immGui++;
++            else {
++                plutonium.gpu.DrawStats.immOther++;
++                if (program == CoreShaders.getPositionColor()) plutonium.gpu.DrawStats.immW_color++;
++                else if (program == CoreShaders.getPositionTex()) { plutonium.gpu.DrawStats.immW_tex++; plutonium.gpu.TexDrawProbe.hit(); }
++                else if (program == CoreShaders.getPositionTexColor()) { plutonium.gpu.DrawStats.immW_texcol++; plutonium.gpu.TexDrawProbe.hit(); }
++                else if (program == CoreShaders.getBlock()) plutonium.gpu.DrawStats.immW_block++;
++            }
+ 
+-                    case COLOR:
+-                        GL11.glDisableClientState(GL11.GL_COLOR_ARRAY);
+-                        GlStateManager.resetColor();
+-                        break;
+-
+-                    case NORMAL:
+-                        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
+-                }
+-            }
++            // Mirror the legacy behavior of not leaving a per-vertex color tint applied.
++            if (vertexformat.hasColor()) GlStateManager.resetColor();
+         }
+ 
+         p_181679_1_.reset();
+     }
++
++    /** Legacy hook — the Vulkan dispatch has no cross-draw VAO state to invalidate. */
++    public static void invalidateState() { }
++
++    /**
++     * Draw a POSITION_3F-only baked VBO (sky dome / void plane / star field). No per-vertex
++     * color: the pipeline feeds white from the constants binding and GlStateManager.color
++     * supplies the tint through the color-modifier uniform.
++     */
++    public static void drawPositionVbo(net.minecraft.client.renderer.vertex.VertexBuffer vbo)
++    {
++        if (vbo == null || vbo.getCount() == 0)
++        {
++            return;
++        }
++
++        plutonium.gpu.Batches.flushAll();   // keep draw order against pending batched geometry
++
++        ShaderProgram program = CoreShaders.getPositionColor();
++        program.use();
++        GlStateManager.syncUniforms(program);
++        VkDrawDispatch.drawBuffer(vbo.getVertexFormat(), vbo.getVkBuffer(), vbo.getVkOffset(), vbo.getDrawMode(), vbo.getCount());
++        plutonium.gpu.DrawStats.immOther++;
++    }
++
++    private static ShaderProgram selectProgram(VertexFormat format)
++    {
++        boolean hasColor = false, hasTex = false, hasLightmap = false, hasNormal = false;
++
++        for (VertexFormatElement e : format.getElements())
++        {
++            switch (e.getUsage())
++            {
++                case COLOR: hasColor = true; break;
++                case UV:
++                    if (e.getIndex() == 0) hasTex = true;
++                    else if (e.getIndex() == 1) hasLightmap = true;
++                    break;
++                case NORMAL: hasNormal = true; break;
++                default: break;
++            }
++        }
++
++        if (hasLightmap) return CoreShaders.getBlock();
++        if (hasNormal) return CoreShaders.getEntity();
++        if (hasTex && hasColor) return CoreShaders.getPositionTexColor();
++        if (hasTex) return CoreShaders.getPositionTex();
++        return CoreShaders.getPositionColor();
++    }
+ }

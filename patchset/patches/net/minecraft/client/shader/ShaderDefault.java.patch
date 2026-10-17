@@ -1,0 +1,10 @@
+--- a/net/minecraft/client/shader/ShaderDefault.java
++++ b/net/minecraft/client/shader/ShaderDefault.java
+@@ -1,6 +1,6 @@
+ package net.minecraft.client.shader;
+ 
+-import org.lwjgl.util.vector.Matrix4f;
++import plutonium.gpu.math.Matrix4f;
+ 
+ public class ShaderDefault extends ShaderUniform
+ {

@@ -1,0 +1,38 @@
+--- a/net/minecraft/client/gui/GuiSlot.java
++++ b/net/minecraft/client/gui/GuiSlot.java
+@@ -6,7 +6,7 @@
+ import net.minecraft.client.renderer.WorldRenderer;
+ import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
+ import net.minecraft.util.MathHelper;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.MouseShim;
+ 
+ public abstract class GuiSlot
+ {
+@@ -262,7 +262,7 @@
+     {
+         if (this.isMouseYWithinSlotBounds(this.mouseY))
+         {
+-            if (Mouse.getEventButton() == 0 && Mouse.getEventButtonState() && this.mouseY >= this.top && this.mouseY <= this.bottom)
++            if (MouseShim.getEventButton() == 0 && MouseShim.getEventButtonState() && this.mouseY >= this.top && this.mouseY <= this.bottom)
+             {
+                 int i = (this.width - this.getListWidth()) / 2;
+                 int j = (this.width + this.getListWidth()) / 2;
+@@ -280,7 +280,7 @@
+                 }
+             }
+ 
+-            if (Mouse.isButtonDown(0) && this.getEnabled())
++            if (MouseShim.isButtonDown(0) && this.getEnabled())
+             {
+                 if (this.initialClickY == -1)
+                 {
+@@ -353,7 +353,7 @@
+                 this.initialClickY = -1;
+             }
+ 
+-            int i2 = Mouse.getEventDWheel();
++            int i2 = MouseShim.getEventDWheel();
+ 
+             if (i2 != 0)
+             {

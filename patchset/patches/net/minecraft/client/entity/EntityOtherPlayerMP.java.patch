@@ -1,0 +1,85 @@
+--- a/net/minecraft/client/entity/EntityOtherPlayerMP.java
++++ b/net/minecraft/client/entity/EntityOtherPlayerMP.java
+@@ -19,6 +19,13 @@
+     private double otherPlayerMPYaw;
+     private double otherPlayerMPPitch;
+ 
++    // Lag Extrapolation: when the last server update arrived, and the smoothed per-tick
++    // velocity between the last two updates — used to dead-reckon through packet stalls
++    private long lastServerUpdateMs;
++    private double extrapVelX;
++    private double extrapVelY;
++    private double extrapVelZ;
++
+     public EntityOtherPlayerMP(World worldIn, GameProfile gameProfileIn)
+     {
+         super(worldIn, gameProfileIn);
+@@ -35,6 +42,36 @@
+ 
+     public void setPositionAndRotation2(double x, double y, double z, float yaw, float pitch, int posRotationIncrements, boolean p_180426_10_)
+     {
++        // Velocity estimate from the previous target — measured between server updates,
++        // so any extrapolation we applied to posX/Y/Z meanwhile can't pollute it
++        long now = System.currentTimeMillis();
++        long dt = now - this.lastServerUpdateMs;
++
++        if (this.lastServerUpdateMs != 0L && dt > 0L && dt <= 1000L)
++        {
++            double ticks = (double)dt / 50.0D;
++            double vx = (x - this.otherPlayerMPX) / ticks;
++            double vy = (y - this.otherPlayerMPY) / ticks;
++            double vz = (z - this.otherPlayerMPZ) / ticks;
++
++            if (vx * vx + vy * vy + vz * vz > 1.0D)
++            {
++                // over 1 block/tick is a teleport, not motion — don't extrapolate it
++                this.extrapVelX = this.extrapVelY = this.extrapVelZ = 0.0D;
++            }
++            else
++            {
++                this.extrapVelX = this.extrapVelX * 0.5D + vx * 0.5D;
++                this.extrapVelY = this.extrapVelY * 0.5D + vy * 0.5D;
++                this.extrapVelZ = this.extrapVelZ * 0.5D + vz * 0.5D;
++            }
++        }
++        else
++        {
++            this.extrapVelX = this.extrapVelY = this.extrapVelZ = 0.0D;
++        }
++
++        this.lastServerUpdateMs = now;
+         this.otherPlayerMPX = x;
+         this.otherPlayerMPY = y;
+         this.otherPlayerMPZ = z;
+@@ -43,6 +80,11 @@
+         this.otherPlayerMPPosRotationIncrements = posRotationIncrements;
+     }
+ 
++    public double getServerPosX() { return this.otherPlayerMPX; }
++    public double getServerPosY() { return this.otherPlayerMPY; }
++    public double getServerPosZ() { return this.otherPlayerMPZ; }
++    public boolean hasServerPos() { return this.otherPlayerMPPosRotationIncrements > 0; }
++
+     public void onUpdate()
+     {
+         this.renderOffsetY = 0.0F;
+@@ -98,6 +140,19 @@
+             this.setPosition(d0, d1, d2);
+             this.setRotation(this.rotationYaw, this.rotationPitch);
+         }
++        else if (plutonium.module.modules.LagExtrapolation.isActive()
++                && this.lastServerUpdateMs != 0L
++                && System.currentTimeMillis() - this.lastServerUpdateMs <= plutonium.module.modules.LagExtrapolation.maxTimeMs())
++        {
++            // Interpolation ran dry (3+ ticks without a server update): dead-reckon along
++            // the last known velocity until data resumes or the stall outlives Max Time
++            double vy = plutonium.module.modules.LagExtrapolation.extrapolateVertical() ? this.extrapVelY : 0.0D;
++
++            if (this.extrapVelX != 0.0D || vy != 0.0D || this.extrapVelZ != 0.0D)
++            {
++                this.setPosition(this.posX + this.extrapVelX, this.posY + vy, this.posZ + this.extrapVelZ);
++            }
++        }
+ 
+         this.prevCameraYaw = this.cameraYaw;
+         this.updateArmSwingProgress();

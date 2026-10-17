@@ -1,0 +1,77 @@
+--- a/net/minecraft/client/gui/GuiDisconnected.java
++++ b/net/minecraft/client/gui/GuiDisconnected.java
+@@ -2,6 +2,8 @@
+ 
+ import java.io.IOException;
+ import java.util.List;
++import net.minecraft.client.gui.clickgui.DrawUtils;
++import net.minecraft.client.renderer.GlStateManager;
+ import net.minecraft.client.resources.I18n;
+ import net.minecraft.util.IChatComponent;
+ 
+@@ -42,19 +44,56 @@
+ 
+     public void drawScreen(int mouseX, int mouseY, float partialTicks)
+     {
+-        this.drawDefaultBackground();
+-        this.drawCenteredString(this.fontRendererObj, this.reason, this.width / 2, this.height / 2 - this.field_175353_i / 2 - this.fontRendererObj.FONT_HEIGHT * 2, 11184810);
+-        int i = this.height / 2 - this.field_175353_i / 2;
++        GlStateManager.enableBlend();
++        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+ 
+-        if (this.multilineMessage != null)
+-        {
+-            for (String s : this.multilineMessage)
+-            {
+-                this.drawCenteredString(this.fontRendererObj, s, this.width / 2, i, 16777215);
+-                i += this.fontRendererObj.FONT_HEIGHT;
++        // Full-screen dark background
++        Gui.drawRect(0, 0, this.width, this.height, 0xFF0E1118);
++
++        // Panel
++        int panelW = Math.min(this.width - 60, 400);
++        int msgH   = this.field_175353_i + this.fontRendererObj.FONT_HEIGHT * 2 + 16;
++        int panelH = Math.max(80, msgH + 30);
++        int panelX = this.width / 2 - panelW / 2;
++        int panelY = this.height / 2 - panelH / 2 - 16;
++        int headerH = 18;
++
++        // Shadow
++        DrawUtils.drawRect(panelX + 3, panelY + 4, panelW, panelH, 0x55000000);
++
++        // Panel body
++        DrawUtils.drawRoundedRect(panelX, panelY, panelW, panelH, DrawUtils.T_WIN_BG);
++        DrawUtils.drawRoundedRectBorder(panelX, panelY, panelW, panelH, DrawUtils.T_BORDER);
++
++        // Header — red-tinted disconnect style
++        Gui.drawRect(panelX + 2, panelY + 1, panelX + panelW - 2, panelY + headerH, 0xFF090B16);
++        DrawUtils.drawGradientRect(panelX + 2, panelY + 1, panelW - 4, headerH - 1, 0xFFB03030, 0xFF7A1A1A);
++        DrawUtils.drawGradientRect(panelX + 3, panelY + 1, panelW - 6, (headerH - 1) / 2, 0x22FFFFFF, 0x00FFFFFF);
++
++        // Header text
++        int reasonW = this.fontRendererObj.getStringWidth(this.reason);
++        this.fontRendererObj.drawString(this.reason,
++            panelX + (panelW - reasonW) / 2, panelY + (headerH - 8) / 2, DrawUtils.T_TEXT_PRIMARY);
++
++        // Separator
++        Gui.drawRect(panelX + 2, panelY + headerH, panelX + panelW - 2, panelY + headerH + 1, 0x28FFFFFF);
++
++        // Message lines
++        int ty = panelY + headerH + 10;
++        if (this.multilineMessage != null) {
++            for (String s : this.multilineMessage) {
++                int sw = this.fontRendererObj.getStringWidth(s);
++                this.fontRendererObj.drawString(s, panelX + (panelW - sw) / 2, ty, DrawUtils.T_TEXT_SECONDARY);
++                ty += this.fontRendererObj.FONT_HEIGHT + 2;
+             }
+         }
+ 
++        // Watermark
++        String wm = "Plutonium";
++        this.fontRendererObj.drawString(wm, this.width / 2 - this.fontRendererObj.getStringWidth(wm) / 2,
++            this.height - 14, DrawUtils.T_HEADER_BOT);
++
++        GlStateManager.disableBlend();
+         super.drawScreen(mouseX, mouseY, partialTicks);
+     }
+ }

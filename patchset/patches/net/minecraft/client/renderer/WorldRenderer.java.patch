@@ -1,0 +1,263 @@
+--- a/net/minecraft/client/renderer/WorldRenderer.java
++++ b/net/minecraft/client/renderer/WorldRenderer.java
+@@ -13,6 +13,7 @@
+ import net.minecraft.client.renderer.vertex.VertexFormatElement;
+ import net.minecraft.util.MathHelper;
+ import org.apache.logging.log4j.LogManager;
++import org.lwjgl.system.MemoryUtil;
+ 
+ public class WorldRenderer
+ {
+@@ -31,6 +32,17 @@
+     private VertexFormat vertexFormat;
+     private boolean isDrawing;
+ 
++    // Set by quadsToTriangles(): the getters then describe the triangulated copy in
++    // triangleScratch instead of the quads in byteBuffer, until the next reset().
++    private boolean triangulated;
++
++    // Shared quads->triangles scratch. Every caller fills it and hands it to the draw in the
++    // same main-thread call stack before the next conversion can run, so one grow-only buffer
++    // serves all WorldRenderers. A per-instance copy (2x each builder's staging buffer)
++    // accumulated ~2 GB of direct memory across the chunk-builder pool, hitting
++    // MaxDirectMemorySize and stalling the client in Bits.reserveMemory System.gc() storms.
++    private static ByteBuffer triangleScratch;
++
+     public WorldRenderer(int bufferSizeIn)
+     {
+         this.byteBuffer = GLAllocation.createDirectByteBuffer(bufferSizeIn * 4);
+@@ -169,6 +181,7 @@
+ 
+     public void reset()
+     {
++        this.triangulated = false;
+         this.vertexCount = 0;
+         this.field_181677_f = null;
+         this.field_181678_g = 0;
+@@ -555,7 +568,7 @@
+ 
+     public ByteBuffer getByteBuffer()
+     {
+-        return this.byteBuffer;
++        return this.triangulated ? triangleScratch : this.byteBuffer;
+     }
+ 
+     public VertexFormat getVertexFormat()
+@@ -565,12 +578,215 @@
+ 
+     public int getVertexCount()
+     {
+-        return this.vertexCount;
++        return this.triangulated ? this.vertexCount / 4 * 6 : this.vertexCount;
++    }
++
++    public boolean isDrawing()
++    {
++        return this.isDrawing;
+     }
+ 
+     public int getDrawMode()
+     {
+-        return this.drawMode;
++        return this.triangulated ? 4 : this.drawMode;
++    }
++
++    /**
++     * Neither core GL nor Vulkan draws quads, so a finished GL_QUADS buffer is rewritten as
++     * GL_TRIANGLES (each quad abcd becomes abc + acd) into the shared scratch buffer. The
++     * getters report the triangulated data until the next reset().
++     */
++    public void quadsToTriangles()
++    {
++        if (this.drawMode != 7 || this.triangulated)
++        {
++            return;
++        }
++
++        int stride = this.vertexFormat.getNextOffset();
++        int quads = this.vertexCount / 4;
++        int needed = quads * 6 * stride;
++
++        if (triangleScratch == null || triangleScratch.capacity() < needed)
++        {
++            triangleScratch = GLAllocation.createDirectByteBuffer(needed);
++        }
++
++        long src = MemoryUtil.memAddress0(this.byteBuffer);
++        long dst = MemoryUtil.memAddress0(triangleScratch);
++        long quadBytes = 4L * stride;
++
++        for (int q = 0; q < quads; ++q)
++        {
++            long a = src + q * quadBytes;
++            MemoryUtil.memCopy(a, dst, 3L * stride);                        // a b c
++            MemoryUtil.memCopy(a, dst + 3L * stride, stride);               // a
++            MemoryUtil.memCopy(a + 2L * stride, dst + 4L * stride, 2L * stride); // c d
++            dst += 6L * stride;
++        }
++
++        triangleScratch.position(0);
++        triangleScratch.limit(needed);
++        this.triangulated = true;
++    }
++
++    /**
++     * Fast lane for {@link net.minecraft.client.model.TexturedQuad#emitTransformed}: write one
++     * OLDMODEL_POSITION_TEX_NORMAL face (pos 3F, tex 2F, normal 3B + 1 pad = 24 bytes/vertex),
++     * already triangulated — 6 vertices in the order {@link #quadsToTriangles} would have
++     * produced (0,1,2, 0,2,3). The face normal is shared by all 6, pre-encoded as bytes.
++     *
++     * <p>The batch is begun in mode 4, so the uploader skips quadsToTriangles entirely. That
++     * pass re-copied every model vertex per quad; on a 37-entity server lobby it was over half
++     * the ModelBatch flush cost (38us -> 17us, +24% fps). Writing 6 vertices here beats
++     * writing 4 and copying out 6.
++     *
++     * <p>Caller must have begun the buffer with that format.
++     */
++    public void putModelTriangles(float x0, float y0, float z0, float u0, float v0,
++                                  float x1, float y1, float z1, float u1, float v1,
++                                  float x2, float y2, float z2, float u2, float v2,
++                                  float x3, float y3, float z3, float u3, float v3,
++                                  byte nx, byte ny, byte nz)
++    {
++        this.putTriangles24(x0, y0, z0, u0, v0, x1, y1, z1, u1, v1,
++                            x2, y2, z2, u2, v2, x3, y3, z3, u3, v3,
++                            nx, ny, nz, (byte) 0);
++    }
++
++    /**
++     * The POSITION_TEX_COLOR twin of {@link #putModelTriangles} — same 24-byte vertex shape
++     * (pos 3F, tex 2F, 4 trailing bytes), with the trailing bytes carrying RGBA instead of a
++     * packed normal. Used by {@link plutonium.gpu.FontBatch}, whose batch is likewise begun in
++     * mode 4 so glyphs skip quadsToTriangles.
++     */
++    public void putGlyphTriangles(float x0, float y0, float z0, float u0, float v0,
++                                  float x1, float y1, float z1, float u1, float v1,
++                                  float x2, float y2, float z2, float u2, float v2,
++                                  float x3, float y3, float z3, float u3, float v3,
++                                  byte r, byte g, byte b, byte a)
++    {
++        this.putTriangles24(x0, y0, z0, u0, v0, x1, y1, z1, u1, v1,
++                            x2, y2, z2, u2, v2, x3, y3, z3, u3, v3, r, g, b, a);
++    }
++
++    /**
++     * Write one quad as two triangles (0,1,2 / 0,2,3 — what {@link #quadsToTriangles} would
++     * have produced) for any 24-byte format shaped pos 3F + tex 2F + 4 bytes. The four
++     * trailing bytes are shared by all six vertices, which is what makes both the model
++     * (normal) and glyph (colour) formats fit one writer.
++     */
++    private void putTriangles24(float x0, float y0, float z0, float u0, float v0,
++                                float x1, float y1, float z1, float u1, float v1,
++                                float x2, float y2, float z2, float u2, float v2,
++                                float x3, float y3, float z3, float u3, float v3,
++                                byte b0, byte b1, byte b2, byte b3)
++    {
++        this.rawIntBuffer.position(this.func_181664_j());
++        this.func_181670_b(36);
++        ByteBuffer buf = this.byteBuffer;
++        int i = this.vertexCount * 24;
++        putVertex24(buf, i,       x0, y0, z0, u0, v0, b0, b1, b2, b3);
++        putVertex24(buf, i + 24,  x1, y1, z1, u1, v1, b0, b1, b2, b3);
++        putVertex24(buf, i + 48,  x2, y2, z2, u2, v2, b0, b1, b2, b3);
++        putVertex24(buf, i + 72,  x0, y0, z0, u0, v0, b0, b1, b2, b3);
++        putVertex24(buf, i + 96,  x2, y2, z2, u2, v2, b0, b1, b2, b3);
++        putVertex24(buf, i + 120, x3, y3, z3, u3, v3, b0, b1, b2, b3);
++        this.vertexCount += 6;
++    }
++
++    private static void putVertex24(ByteBuffer buf, int i, float x, float y, float z,
++                                    float u, float v, byte b0, byte b1, byte b2, byte b3)
++    {
++        buf.putFloat(i,      x); buf.putFloat(i + 4,  y); buf.putFloat(i + 8,  z);
++        buf.putFloat(i + 12, u); buf.putFloat(i + 16, v);
++        buf.put(i + 20, b0); buf.put(i + 21, b1); buf.put(i + 22, b2); buf.put(i + 23, b3);
++    }
++
++    /**
++     * POSITION_TEX (20-byte: pos 3F + tex 2F, no trailing bytes) twin of
++     * {@link #putModelTriangles} — writes one quad as two triangles (0,1,2 / 0,2,3) so the
++     * batch never runs {@link #quadsToTriangles}. Used by {@link plutonium.gpu.GuiQuadBatch}
++     * (HUD) and {@link plutonium.gpu.ArrowBatch}, both begun in mode 4.
++     */
++    public void putTexTriangles(float x0, float y0, float z0, float u0, float v0,
++                                float x1, float y1, float z1, float u1, float v1,
++                                float x2, float y2, float z2, float u2, float v2,
++                                float x3, float y3, float z3, float u3, float v3)
++    {
++        this.rawIntBuffer.position(this.func_181664_j());
++        this.func_181670_b(30);              // 6 verts * 5 ints
++        ByteBuffer buf = this.byteBuffer;
++        int i = this.vertexCount * 20;
++        putVertexTex(buf, i,       x0, y0, z0, u0, v0);
++        putVertexTex(buf, i + 20,  x1, y1, z1, u1, v1);
++        putVertexTex(buf, i + 40,  x2, y2, z2, u2, v2);
++        putVertexTex(buf, i + 60,  x0, y0, z0, u0, v0);
++        putVertexTex(buf, i + 80,  x2, y2, z2, u2, v2);
++        putVertexTex(buf, i + 100, x3, y3, z3, u3, v3);
++        this.vertexCount += 6;
++    }
++
++    private static void putVertexTex(ByteBuffer buf, int i, float x, float y, float z,
++                                     float u, float v)
++    {
++        buf.putFloat(i,      x); buf.putFloat(i + 4,  y); buf.putFloat(i + 8,  z);
++        buf.putFloat(i + 12, u); buf.putFloat(i + 16, v);
++    }
++
++    /**
++     * POSITION_COLOR (16-byte: pos 3F + one RGBA shared by all six vertices) twin of
++     * {@link #putModelTriangles}. Used by {@link plutonium.gpu.RectBatch}, whose solid-colour
++     * rects have a single colour per quad; the batch is begun in mode 4 so it skips
++     * {@link #quadsToTriangles}.
++     */
++    public void putColorTriangles(float x0, float y0, float z0,
++                                  float x1, float y1, float z1,
++                                  float x2, float y2, float z2,
++                                  float x3, float y3, float z3,
++                                  byte r, byte g, byte b, byte a)
++    {
++        this.rawIntBuffer.position(this.func_181664_j());
++        this.func_181670_b(24);              // 6 verts * 4 ints
++        ByteBuffer buf = this.byteBuffer;
++        int i = this.vertexCount * 16;
++        putVertexColor(buf, i,      x0, y0, z0, r, g, b, a);
++        putVertexColor(buf, i + 16, x1, y1, z1, r, g, b, a);
++        putVertexColor(buf, i + 32, x2, y2, z2, r, g, b, a);
++        putVertexColor(buf, i + 48, x0, y0, z0, r, g, b, a);
++        putVertexColor(buf, i + 64, x2, y2, z2, r, g, b, a);
++        putVertexColor(buf, i + 80, x3, y3, z3, r, g, b, a);
++        this.vertexCount += 6;
++    }
++
++    private static void putVertexColor(ByteBuffer buf, int i, float x, float y, float z,
++                                       byte r, byte g, byte b, byte a)
++    {
++        buf.putFloat(i, x); buf.putFloat(i + 4, y); buf.putFloat(i + 8, z);
++        buf.put(i + 12, r); buf.put(i + 13, g); buf.put(i + 14, b); buf.put(i + 15, a);
++    }
++
++    /**
++     * Bake a modelview into the positions of vertices [fromVertex, vertexCount) in place —
++     * used by {@link plutonium.gpu.ItemBatch} to move just-captured baked item quads into
++     * eye space so they can all draw later under an identity modelview. Only positions are
++     * touched (the item program ignores normals); works for any format whose first element
++     * is POSITION_3F.
++     */
++    public void transformPositionsRange(int fromVertex, plutonium.gpu.math.Matrix4f mv)
++    {
++        int stride = this.vertexFormat.getNextOffset();
++        ByteBuffer buf = this.byteBuffer;
++        for (int v = fromVertex; v < this.vertexCount; ++v)
++        {
++            int i = v * stride;
++            float x = buf.getFloat(i);
++            float y = buf.getFloat(i + 4);
++            float z = buf.getFloat(i + 8);
++            buf.putFloat(i,     mv.m00 * x + mv.m10 * y + mv.m20 * z + mv.m30);
++            buf.putFloat(i + 4, mv.m01 * x + mv.m11 * y + mv.m21 * z + mv.m31);
++            buf.putFloat(i + 8, mv.m02 * x + mv.m12 * y + mv.m22 * z + mv.m32);
++        }
+     }
+ 
+     public void putColor4(int argb)

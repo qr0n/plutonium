@@ -1,0 +1,27 @@
+--- a/net/minecraft/client/gui/GuiScreenResourcePacks.java
++++ b/net/minecraft/client/gui/GuiScreenResourcePacks.java
+@@ -14,7 +14,7 @@
+ import net.minecraft.util.Util;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.Sys;
++
+ 
+ public class GuiScreenResourcePacks extends GuiScreen
+ {
+@@ -147,7 +147,14 @@
+                 if (flag)
+                 {
+                     logger.info("Opening via system class!");
+-                    Sys.openURL("file://" + s);
++                    try
++                    {
++                        java.awt.Desktop.getDesktop().browse(new java.net.URI("file://" + s));
++                    }
++                    catch (Exception e)
++                    {
++                        logger.error("Couldn\'t open link", e);
++                    }
+                 }
+             }
+             else if (button.id == 1)

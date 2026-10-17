@@ -1,0 +1,512 @@
+--- a/net/minecraft/client/renderer/EntityRenderer.java
++++ b/net/minecraft/client/renderer/EntityRenderer.java
+@@ -60,11 +60,10 @@
+ import net.minecraft.world.biome.BiomeGenBase;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.input.Mouse;
+-import org.lwjgl.opengl.Display;
+ import org.lwjgl.opengl.GL11;
+-import org.lwjgl.opengl.GLContext;
+-import org.lwjgl.util.glu.Project;
++import plutonium.gpu.GLUCompat;
++import plutonium.gpu.MouseShim;
++import plutonium.gpu.WindowManager;
+ 
+ public class EntityRenderer implements IResourceManagerReloadListener
+ {
+@@ -83,8 +82,8 @@
+     private Entity pointedEntity;
+     private MouseFilter mouseFilterXAxis = new MouseFilter();
+     private MouseFilter mouseFilterYAxis = new MouseFilter();
+-    private float thirdPersonDistance = 4.0F;
+-    private float thirdPersonDistanceTemp = 4.0F;
++    float thirdPersonDistance = 4.0F;
++    float thirdPersonDistanceTemp = 4.0F;
+     private float smoothCamYaw;
+     private float smoothCamPitch;
+     private float smoothCamFilterX;
+@@ -301,7 +300,10 @@
+             this.mc.setRenderViewEntity(this.mc.thePlayer);
+         }
+ 
+-        float f3 = this.mc.theWorld.getLightBrightness(new BlockPos(this.mc.getRenderViewEntity()));
++        // Sample light at eye height, not the feet block: standing in a slab, path or
++        // other non-opaque block otherwise reads as darkness and turns the fog slate-grey.
++        Entity viewEntity = this.mc.getRenderViewEntity();
++        float f3 = this.mc.theWorld.getLightBrightness(new BlockPos(viewEntity.posX, viewEntity.posY + (double)viewEntity.getEyeHeight(), viewEntity.posZ));
+         float f4 = (float)this.mc.gameSettings.renderDistanceChunks / 32.0F;
+         float f2 = f3 * (1.0F - f4) + f4;
+         this.fogColor1 += (f2 - this.fogColor1) * 0.1F;
+@@ -392,13 +394,16 @@
+                         return p_apply_1_.canBeCollidedWith();
+                     }
+                 }));
++
++
+                 double d2 = d1;
+ 
+                 for (int j = 0; j < list.size(); ++j)
+                 {
+                     Entity entity1 = (Entity)list.get(j);
+                     float f1 = entity1.getCollisionBorderSize();
+-                    AxisAlignedBB axisalignedbb = entity1.getEntityBoundingBox().expand((double)f1, (double)f1, (double)f1);
++                    AxisAlignedBB pickBox = entity1.getEntityBoundingBox();
++                    AxisAlignedBB axisalignedbb = pickBox.expand((double)f1, (double)f1, (double)f1);
+                     MovingObjectPosition movingobjectposition = axisalignedbb.calculateIntercept(vec3, vec32);
+ 
+                     if (axisalignedbb.isVecInside(vec3))
+@@ -509,6 +514,8 @@
+                 f = f * 60.0F / 70.0F;
+             }
+ 
++            f = plutonium.module.modules.FOVChanger.processFOV(f);
++            f = plutonium.module.modules.Zoom.processFOV(f);
+             return f;
+         }
+     }
+@@ -527,6 +534,13 @@
+             }
+ 
+             if (f < 0.0F)
++            {
++                return;
++            }
++
++            float shake = plutonium.module.modules.NoHurtCam.getShakeScale();
++
++            if (shake <= 0.0F)
+             {
+                 return;
+             }
+@@ -535,7 +549,7 @@
+             f = MathHelper.sin(f * f * f * f * (float)Math.PI);
+             float f2 = entitylivingbase.attackedAtYaw;
+             GlStateManager.rotate(-f2, 0.0F, 1.0F, 0.0F);
+-            GlStateManager.rotate(-f * 14.0F, 0.0F, 0.0F, 1.0F);
++            GlStateManager.rotate(-f * 14.0F * shake, 0.0F, 0.0F, 1.0F);
+             GlStateManager.rotate(f2, 0.0F, 1.0F, 0.0F);
+         }
+     }
+@@ -647,16 +661,16 @@
+ 
+         if (!this.mc.gameSettings.debugCamEnable)
+         {
+-            GlStateManager.rotate(entity.prevRotationPitch + (entity.rotationPitch - entity.prevRotationPitch) * partialTicks, 1.0F, 0.0F, 0.0F);
++            GlStateManager.rotate(entity.prevRotationPitch + (entity.rotationPitch - entity.prevRotationPitch) * partialTicks + plutonium.module.modules.FreeLook.getPitchOffset(), 1.0F, 0.0F, 0.0F);
+ 
+             if (entity instanceof EntityAnimal)
+             {
+                 EntityAnimal entityanimal = (EntityAnimal)entity;
+-                GlStateManager.rotate(entityanimal.prevRotationYawHead + (entityanimal.rotationYawHead - entityanimal.prevRotationYawHead) * partialTicks + 180.0F, 0.0F, 1.0F, 0.0F);
++                GlStateManager.rotate(entityanimal.prevRotationYawHead + (entityanimal.rotationYawHead - entityanimal.prevRotationYawHead) * partialTicks + 180.0F + plutonium.module.modules.FreeLook.getYawOffset(), 0.0F, 1.0F, 0.0F);
+             }
+             else
+             {
+-                GlStateManager.rotate(entity.prevRotationYaw + (entity.rotationYaw - entity.prevRotationYaw) * partialTicks + 180.0F, 0.0F, 1.0F, 0.0F);
++                GlStateManager.rotate(entity.prevRotationYaw + (entity.rotationYaw - entity.prevRotationYaw) * partialTicks + 180.0F + plutonium.module.modules.FreeLook.getYawOffset(), 0.0F, 1.0F, 0.0F);
+             }
+         }
+ 
+@@ -685,7 +699,7 @@
+             GlStateManager.scale(this.cameraZoom, this.cameraZoom, 1.0D);
+         }
+ 
+-        Project.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * MathHelper.SQRT_2);
++        GLUCompat.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * MathHelper.SQRT_2);
+         GlStateManager.matrixMode(5888);
+         GlStateManager.loadIdentity();
+ 
+@@ -760,7 +774,7 @@
+                 GlStateManager.translate((float)(-(xOffset * 2 - 1)) * f, 0.0F, 0.0F);
+             }
+ 
+-            Project.gluPerspective(this.getFOVModifier(partialTicks, false), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * 2.0F);
++            GLUCompat.gluPerspective(this.getFOVModifier(partialTicks, false), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * 2.0F);
+             GlStateManager.matrixMode(5888);
+             GlStateManager.loadIdentity();
+ 
+@@ -818,10 +832,10 @@
+         GlStateManager.translate(8.0F, 8.0F, 8.0F);
+         GlStateManager.matrixMode(5888);
+         this.mc.getTextureManager().bindTexture(this.locationLightMap);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_CLAMP);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_CLAMP);
++        GlStateManager.glTexParameteri(3553, 10241, 9729);
++        GlStateManager.glTexParameteri(3553, 10240, 9729);
++        GlStateManager.glTexParameteri(3553, 10242, 33071);
++        GlStateManager.glTexParameteri(3553, 10243, 33071);
+         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+         GlStateManager.enableTexture2D();
+         GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+@@ -984,9 +998,10 @@
+ 
+     public void func_181560_a(float p_181560_1_, long p_181560_2_)
+     {
+-        boolean flag = Display.isActive();
+-
+-        if (!flag && this.mc.gameSettings.pauseOnLostFocus && (!this.mc.gameSettings.touchscreen || !Mouse.isButtonDown(1)))
++        boolean flag = WindowManager.isActive();
++
++        if (!flag && this.mc.gameSettings.pauseOnLostFocus && (!this.mc.gameSettings.touchscreen || !MouseShim.isButtonDown(1))
++                && this.mc.isSingleplayer())
+         {
+             if (Minecraft.getSystemTime() - this.prevFrameTime > 500L)
+             {
+@@ -999,12 +1014,14 @@
+         }
+ 
+         this.mc.mcProfiler.startSection("mouse");
+-
+-        if (flag && Minecraft.isRunningOnMac && this.mc.inGameHasFocus && !Mouse.isInsideWindow())
+-        {
+-            Mouse.setGrabbed(false);
+-            Mouse.setCursorPosition(Display.getWidth() / 2, Display.getHeight() / 2);
+-            Mouse.setGrabbed(true);
++        long _tMouse = System.nanoTime();
++
++        if (flag && Minecraft.isRunningOnMac && this.mc.inGameHasFocus && !MouseShim.isInsideWindow())
++        {
++            MouseShim.setGrabbed(false);
++            // Cursor coords are logical window points, not framebuffer pixels.
++            WindowManager.setCursorPosition(WindowManager.getWindowWidth() / 2, WindowManager.getWindowHeight() / 2);
++            MouseShim.setGrabbed(true);
+         }
+ 
+         if (this.mc.inGameHasFocus && flag)
+@@ -1029,17 +1046,20 @@
+                 this.smoothCamPartialTicks = p_181560_1_;
+                 f2 = this.smoothCamFilterX * f4;
+                 f3 = this.smoothCamFilterY * f4;
+-                this.mc.thePlayer.setAngles(f2, f3 * (float)i);
++                if (!plutonium.module.modules.FreeLook.onMouseInput(f2, f3 * (float)i))
++                    this.mc.thePlayer.setAngles(f2, f3 * (float)i);
+             }
+             else
+             {
+                 this.smoothCamYaw = 0.0F;
+                 this.smoothCamPitch = 0.0F;
+-                this.mc.thePlayer.setAngles(f2, f3 * (float)i);
++                if (!plutonium.module.modules.FreeLook.onMouseInput(f2, f3 * (float)i))
++                    this.mc.thePlayer.setAngles(f2, f3 * (float)i);
+             }
+         }
+ 
+         this.mc.mcProfiler.endSection();
++        plutonium.gpu.DrawStats.nsMouse += System.nanoTime() - _tMouse;
+ 
+         if (!this.mc.skipRenderWorld)
+         {
+@@ -1047,8 +1067,8 @@
+             final ScaledResolution scaledresolution = new ScaledResolution(this.mc);
+             int i1 = scaledresolution.getScaledWidth();
+             int j1 = scaledresolution.getScaledHeight();
+-            final int k1 = Mouse.getX() * i1 / this.mc.displayWidth;
+-            final int l1 = j1 - Mouse.getY() * j1 / this.mc.displayHeight - 1;
++            final int k1 = MouseShim.getX() * i1 / this.mc.displayWidth;
++            final int l1 = j1 - MouseShim.getY() * j1 / this.mc.displayHeight - 1;
+             int i2 = this.mc.gameSettings.limitFramerate;
+ 
+             if (this.mc.theWorld != null)
+@@ -1058,7 +1078,11 @@
+                 j = Math.max(j, 60);
+                 long k = System.nanoTime() - p_181560_2_;
+                 long l = Math.max((long)(1000000000 / j / 4) - k, 0L);
++                long _pw0 = System.nanoTime();
+                 this.renderWorld(p_181560_1_, System.nanoTime() + l);
++                Minecraft.perfWorldNs += System.nanoTime() - _pw0;
++                long _tPost = System.nanoTime();
++                plutonium.module.modules.MotionBlur.postRenderWorld(this.mc.displayWidth, this.mc.displayHeight);
+ 
+                 if (OpenGlHelper.shadersSupported)
+                 {
+@@ -1077,12 +1101,32 @@
+                 }
+ 
+                 this.renderEndNanoTime = System.nanoTime();
++                plutonium.gpu.DrawStats.nsPostWorld += System.nanoTime() - _tPost;
+                 this.mc.mcProfiler.endStartSection("gui");
+ 
++                long _tNt = System.nanoTime();
++                // Draw all deferred entity shadows now (one batched draw for the whole frame).
++                // Its enableBlend/bindTexture drain ModelBatch first, so the entity models draw,
++                // then the shadows on top. Unconditional like the nametag flush below so the batch
++                // never carries stale quads across frames.
++                plutonium.gpu.ShadowBatch.flush();
++
++                // Draw all deferred entity nametags now, while the world perspective
++                // projection + camera modelview are still active (before the GUI ortho).
++                // Unconditional (even with the HUD hidden) so the batch never accumulates
++                // stale entries across frames.
++                plutonium.gpu.NametagBatch.flush(this.mc.fontRendererObj);
++                plutonium.gpu.DrawStats.nsNtFlush += System.nanoTime() - _tNt;
++
+                 if (!this.mc.gameSettings.hideGUI || this.mc.currentScreen != null)
+                 {
+                     GlStateManager.alphaFunc(516, 0.1F);
++                    long _pg0 = System.nanoTime();
++                    plutonium.gpu.Batches.flushAll();   // ensure no entity geometry spills into the GUI phase
++                    plutonium.gpu.DrawStats.inGui = true;
+                     this.mc.ingameGUI.renderGameOverlay(p_181560_1_);
++                    plutonium.gpu.DrawStats.inGui = false;
++                    Minecraft.perfGuiNs += System.nanoTime() - _pg0;
+                 }
+ 
+                 this.mc.mcProfiler.endSection();
+@@ -1121,7 +1165,7 @@
+                     {
+                         public String call() throws Exception
+                         {
+-                            return String.format("Scaled: (%d, %d). Absolute: (%d, %d)", new Object[] {Integer.valueOf(k1), Integer.valueOf(l1), Integer.valueOf(Mouse.getX()), Integer.valueOf(Mouse.getY())});
++                            return String.format("Scaled: (%d, %d). Absolute: (%d, %d)", new Object[] {Integer.valueOf(k1), Integer.valueOf(l1), Integer.valueOf(MouseShim.getX()), Integer.valueOf(MouseShim.getY())});
+                         }
+                     });
+                     crashreportcategory.addCrashSectionCallable("Screen size", new Callable<String>()
+@@ -1133,8 +1177,22 @@
+                     });
+                     throw new ReportedException(crashreport);
+                 }
+-            }
+-        }
++
++                // Flush any text/geometry the screen deferred (e.g. the chat input field's
++                // text + cursor) while the GUI ortho is still active. Without this the last
++                // FontBatch content carries into the next frame and is drawn under the world
++                // matrices — so chat text wouldn't appear while typing.
++                plutonium.gpu.Batches.flushAll();
++            }
++        }
++
++        // Unconditionally drain ALL deferred batches at the frame boundary, while the GUI
++        // ortho is still active. The conditional flushes above and the incidental flushes
++        // from GUI state changes leave whatever was batched last un-flushed; with the
++        // double-buffered present path that leftover would flush into the NEXT frame's
++        // buffer — so text alternates between correct and garbage between the two buffers.
++        // One flush here makes each buffer complete before it is handed to the present thread.
++        plutonium.gpu.Batches.flushAll();
+     }
+ 
+     public void renderStreamIndicator(float partialTicks)
+@@ -1185,7 +1243,7 @@
+             Entity entity = this.mc.getRenderViewEntity();
+             GlStateManager.enableBlend();
+             GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+-            GL11.glLineWidth(1.0F);
++            // lineWidth fixed at 1 under Vulkan
+             GlStateManager.disableTexture2D();
+             GlStateManager.depthMask(false);
+             GlStateManager.pushMatrix();
+@@ -1238,6 +1296,21 @@
+ 
+     private void renderWorldPass(int pass, float partialTicks, long finishTimeNano)
+     {
++        // FreeLook: temporarily enter third-person mode with animated pull-back distance.
++        int savedThirdPersonView = this.mc.gameSettings.thirdPersonView;
++        float savedDist = this.thirdPersonDistance;
++        float savedDistTemp = this.thirdPersonDistanceTemp;
++        float freeLookScale = plutonium.module.modules.FreeLook.getCameraScale(partialTicks);
++        boolean freeLookOverride = freeLookScale > 0f && savedThirdPersonView == 0;
++
++        if (freeLookOverride)
++        {
++            float d = 4.0f * freeLookScale;
++            this.mc.gameSettings.thirdPersonView = 1;
++            this.thirdPersonDistance = d;
++            this.thirdPersonDistanceTemp = d;
++        }
++
+         RenderGlobal renderglobal = this.mc.renderGlobal;
+         EffectRenderer effectrenderer = this.mc.effectRenderer;
+         boolean flag = this.isDrawBlockOutline();
+@@ -1265,12 +1338,14 @@
+             this.mc.mcProfiler.endStartSection("sky");
+             GlStateManager.matrixMode(5889);
+             GlStateManager.loadIdentity();
+-            Project.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * 2.0F);
++            GLUCompat.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * 2.0F);
+             GlStateManager.matrixMode(5888);
++            long _tSky = System.nanoTime();
+             renderglobal.renderSky(partialTicks, pass);
++            plutonium.gpu.DrawStats.nsSky += System.nanoTime() - _tSky;
+             GlStateManager.matrixMode(5889);
+             GlStateManager.loadIdentity();
+-            Project.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * MathHelper.SQRT_2);
++            GLUCompat.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * MathHelper.SQRT_2);
+             GlStateManager.matrixMode(5888);
+         }
+ 
+@@ -1287,6 +1362,7 @@
+         this.mc.getTextureManager().bindTexture(TextureMap.locationBlocksTexture);
+         RenderHelper.disableStandardItemLighting();
+         this.mc.mcProfiler.endStartSection("terrain_setup");
++        long _tSetup = System.nanoTime();
+         renderglobal.setupTerrain(entity, (double)partialTicks, icamera, this.frameCount++, this.mc.thePlayer.isSpectator());
+ 
+         if (pass == 0 || pass == 2)
+@@ -1294,16 +1370,20 @@
+             this.mc.mcProfiler.endStartSection("updatechunks");
+             this.mc.renderGlobal.updateChunks(finishTimeNano);
+         }
++
++        plutonium.gpu.DrawStats.nsSetup += System.nanoTime() - _tSetup;
+ 
+         this.mc.mcProfiler.endStartSection("terrain");
+         GlStateManager.matrixMode(5888);
+         GlStateManager.pushMatrix();
+         GlStateManager.disableAlpha();
++        long _tChunks = System.nanoTime();
+         renderglobal.renderBlockLayer(EnumWorldBlockLayer.SOLID, (double)partialTicks, pass, entity);
+         GlStateManager.enableAlpha();
+         renderglobal.renderBlockLayer(EnumWorldBlockLayer.CUTOUT_MIPPED, (double)partialTicks, pass, entity);
+         this.mc.getTextureManager().getTexture(TextureMap.locationBlocksTexture).setBlurMipmap(false, false);
+         renderglobal.renderBlockLayer(EnumWorldBlockLayer.CUTOUT, (double)partialTicks, pass, entity);
++        plutonium.gpu.DrawStats.nsChunks += System.nanoTime() - _tChunks;
+         this.mc.getTextureManager().getTexture(TextureMap.locationBlocksTexture).restoreLastBlurMipmap();
+         GlStateManager.shadeModel(7424);
+         GlStateManager.alphaFunc(516, 0.1F);
+@@ -1315,7 +1395,9 @@
+             GlStateManager.pushMatrix();
+             RenderHelper.enableStandardItemLighting();
+             this.mc.mcProfiler.endStartSection("entities");
++            long _tEnt = System.nanoTime();
+             renderglobal.renderEntities(entity, icamera, partialTicks);
++            plutonium.gpu.DrawStats.nsEntities += System.nanoTime() - _tEnt;
+             RenderHelper.disableStandardItemLighting();
+             this.disableLightmap();
+             GlStateManager.matrixMode(5888);
+@@ -1343,6 +1425,9 @@
+             renderglobal.drawSelectionBox(entityplayer1, this.mc.objectMouseOver, 0, partialTicks);
+             GlStateManager.enableAlpha();
+         }
++
++        plutonium.module.modules.ChunkBorders.renderInWorld(partialTicks);
++        plutonium.Plutonium.getInstance().onRenderWorld(partialTicks);
+ 
+         this.mc.mcProfiler.endStartSection("destroyProgress");
+         GlStateManager.enableBlend();
+@@ -1356,11 +1441,15 @@
+         {
+             this.enableLightmap();
+             this.mc.mcProfiler.endStartSection("litParticles");
++            long _tLitP = System.nanoTime();
+             effectrenderer.renderLitParticles(entity, partialTicks);
++            plutonium.gpu.DrawStats.nsParticles += System.nanoTime() - _tLitP;
+             RenderHelper.disableStandardItemLighting();
+             this.setupFog(0, partialTicks);
+             this.mc.mcProfiler.endStartSection("particles");
++            long _tPart = System.nanoTime();
+             effectrenderer.renderParticles(entity, partialTicks);
++            plutonium.gpu.DrawStats.nsParticles += System.nanoTime() - _tPart;
+             this.disableLightmap();
+         }
+ 
+@@ -1380,7 +1469,9 @@
+         this.mc.getTextureManager().bindTexture(TextureMap.locationBlocksTexture);
+         GlStateManager.shadeModel(7425);
+         this.mc.mcProfiler.endStartSection("translucent");
++        long _tTrans = System.nanoTime();
+         renderglobal.renderBlockLayer(EnumWorldBlockLayer.TRANSLUCENT, (double)partialTicks, pass, entity);
++        plutonium.gpu.DrawStats.nsChunks += System.nanoTime() - _tTrans;
+         GlStateManager.shadeModel(7424);
+         GlStateManager.depthMask(true);
+         GlStateManager.enableCull();
+@@ -1393,7 +1484,15 @@
+             this.renderCloudsCheck(renderglobal, partialTicks, pass);
+         }
+ 
++        // Draw all deferred arrows + baked item quads now, while the WORLD projection and
++        // depth state are still bound (renderHand below replaces the projection, and the
++        // world->GUI boundary is too late). One draw each replaces 6-per-arrow and
++        // 1-per-item immediates.
++        plutonium.gpu.ArrowBatch.flush();
++        plutonium.gpu.ItemBatch.flush();
++
+         this.mc.mcProfiler.endStartSection("hand");
++        long _tHand = System.nanoTime();
+ 
+         if (this.renderHand)
+         {
+@@ -1401,16 +1500,26 @@
+             this.renderHand(partialTicks, pass);
+             this.renderWorldDirections(partialTicks);
+         }
++
++        plutonium.gpu.DrawStats.nsHand += System.nanoTime() - _tHand;
++
++        if (freeLookOverride)
++        {
++            this.mc.gameSettings.thirdPersonView = savedThirdPersonView;
++            this.thirdPersonDistance = savedDist;
++            this.thirdPersonDistanceTemp = savedDistTemp;
++        }
+     }
+ 
+     private void renderCloudsCheck(RenderGlobal renderGlobalIn, float partialTicks, int pass)
+     {
+         if (this.mc.gameSettings.func_181147_e() != 0)
+         {
++            long _tClouds = System.nanoTime();
+             this.mc.mcProfiler.endStartSection("clouds");
+             GlStateManager.matrixMode(5889);
+             GlStateManager.loadIdentity();
+-            Project.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * 4.0F);
++            GLUCompat.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * 4.0F);
+             GlStateManager.matrixMode(5888);
+             GlStateManager.pushMatrix();
+             this.setupFog(0, partialTicks);
+@@ -1419,8 +1528,9 @@
+             GlStateManager.popMatrix();
+             GlStateManager.matrixMode(5889);
+             GlStateManager.loadIdentity();
+-            Project.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * MathHelper.SQRT_2);
++            GLUCompat.gluPerspective(this.getFOVModifier(partialTicks, true), (float)this.mc.displayWidth / (float)this.mc.displayHeight, 0.05F, this.farPlaneDistance * MathHelper.SQRT_2);
+             GlStateManager.matrixMode(5888);
++            plutonium.gpu.DrawStats.nsClouds += System.nanoTime() - _tClouds;
+         }
+     }
+ 
+@@ -1519,7 +1629,7 @@
+             Tessellator tessellator = Tessellator.getInstance();
+             WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+             GlStateManager.disableCull();
+-            GL11.glNormal3f(0.0F, 1.0F, 0.0F);
++            // glNormal3f removed (core profile)
+             GlStateManager.enableBlend();
+             GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+             GlStateManager.alphaFunc(516, 0.1F);
+@@ -1844,8 +1954,7 @@
+             flag = ((EntityPlayer)entity).capabilities.isCreativeMode;
+         }
+ 
+-        GL11.glFog(GL11.GL_FOG_COLOR, (FloatBuffer)this.setFogColorBuffer(this.fogColorRed, this.fogColorGreen, this.fogColorBlue, 1.0F));
+-        GL11.glNormal3f(0.0F, -1.0F, 0.0F);
++        GlStateManager.glFog(GL11.GL_FOG_COLOR, (FloatBuffer)this.setFogColorBuffer(this.fogColorRed, this.fogColorGreen, this.fogColorBlue, 1.0F));
+         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+         Block block = ActiveRenderInfo.getBlockAtEntityViewpoint(this.mc.theWorld, entity, partialTicks);
+ 
+@@ -1872,10 +1981,7 @@
+                 GlStateManager.setFogEnd(f1);
+             }
+ 
+-            if (GLContext.getCapabilities().GL_NV_fog_distance)
+-            {
+-                GL11.glFogi(34138, 34139);
+-            }
++            // GL_NV_fog_distance (eye-radial fog) has no core-profile equivalent.
+         }
+         else if (this.cloudFog)
+         {
+@@ -1916,10 +2022,7 @@
+                 GlStateManager.setFogEnd(f);
+             }
+ 
+-            if (GLContext.getCapabilities().GL_NV_fog_distance)
+-            {
+-                GL11.glFogi(34138, 34139);
+-            }
++            // GL_NV_fog_distance (eye-radial fog) has no core-profile equivalent.
+ 
+             if (this.mc.theWorld.provider.doesXZShowFog((int)entity.posX, (int)entity.posZ))
+             {

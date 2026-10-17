@@ -1,0 +1,1580 @@
+--- a/net/minecraft/client/Minecraft.java
++++ b/net/minecraft/client/Minecraft.java
+@@ -41,6 +41,7 @@
+ import net.minecraft.client.audio.SoundHandler;
+ import net.minecraft.client.entity.EntityPlayerSP;
+ import net.minecraft.client.gui.FontRenderer;
++import net.minecraft.client.gui.Gui;
+ import net.minecraft.client.gui.GuiChat;
+ import net.minecraft.client.gui.GuiControls;
+ import net.minecraft.client.gui.GuiGameOver;
+@@ -171,19 +172,13 @@
+ import org.apache.commons.lang3.Validate;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.LWJGLException;
+-import org.lwjgl.Sys;
+-import org.lwjgl.input.Keyboard;
+-import org.lwjgl.input.Mouse;
+-import org.lwjgl.opengl.ContextCapabilities;
+-import org.lwjgl.opengl.Display;
+-import org.lwjgl.opengl.DisplayMode;
++import org.lwjgl.opengl.GL;
+ import org.lwjgl.opengl.GL11;
+ import org.lwjgl.opengl.GL20;
+-import org.lwjgl.opengl.GLContext;
+-import org.lwjgl.opengl.OpenGLException;
+-import org.lwjgl.opengl.PixelFormat;
+-import org.lwjgl.util.glu.GLU;
++import org.lwjgl.opengl.GLCapabilities;
++import plutonium.gpu.KeyboardShim;
++import plutonium.gpu.MouseShim;
++import plutonium.gpu.WindowManager;
+ 
+ public class Minecraft implements IThreadListener, IPlayerUsage
+ {
+@@ -191,7 +186,7 @@
+     private static final ResourceLocation locationMojangPng = new ResourceLocation("textures/gui/title/mojang.png");
+     public static final boolean isRunningOnMac = Util.getOSType() == Util.EnumOS.OSX;
+     public static byte[] memoryReserve = new byte[10485760];
+-    private static final List<DisplayMode> macDisplayModes = Lists.newArrayList(new DisplayMode[] {new DisplayMode(2560, 1600), new DisplayMode(2880, 1800)});
++    private static final int[][] macDisplayModes = {{2560, 1600}, {2880, 1800}};
+     private final File fileResourcepacks;
+     private final PropertyMap twitchDetails;
+     private final PropertyMap field_181038_N;
+@@ -200,7 +195,7 @@
+     private static Minecraft theMinecraft;
+     public PlayerControllerMP playerController;
+     private boolean fullscreen;
+-    private boolean enableGLErrorChecking = true;
++    private boolean enableGLErrorChecking = false;
+     private boolean hasCrashed;
+     private CrashReport crashReporter;
+     public int displayWidth;
+@@ -217,14 +212,14 @@
+     private Entity renderViewEntity;
+     public Entity pointedEntity;
+     public EffectRenderer effectRenderer;
+-    private final Session session;
++    private Session session;
+     private boolean isGamePaused;
+     public FontRenderer fontRendererObj;
+     public FontRenderer standardGalacticFontRenderer;
+     public GuiScreen currentScreen;
+     public LoadingScreenRenderer loadingScreen;
+     public EntityRenderer entityRenderer;
+-    private int leftClickCounter;
++    public int leftClickCounter;
+     private int tempDisplayWidth;
+     private int tempDisplayHeight;
+     private IntegratedServer theIntegratedServer;
+@@ -262,6 +257,15 @@
+     private LanguageManager mcLanguageManager;
+     private IStream stream;
+     private Framebuffer framebufferMc;
++    // Present-thread overlap (PresentThread.ENABLED): framebufferMc is double-buffered so the
++    // main thread renders frame N+1 while the present thread blits frame N. framebufferMc
++    // always points at the buffer being rendered THIS frame; we flip parity each frame.
++    private Framebuffer framebufferMcA, framebufferMcB;
++    private int framebufferParity = 0;
++    // Pending resize — applied only when Display stops reporting wasResized(), preventing
++    // a rapid-fire delete+create cycle that crashes Apple Metal's OpenGL layer.
++    private int pendingResizeWidth  = -1;
++    private int pendingResizeHeight = -1;
+     private TextureMap textureMapBlocks;
+     private SoundHandler mcSoundHandler;
+     private MusicTicker mcMusicTicker;
+@@ -298,7 +302,6 @@
+         this.sessionService = (new YggdrasilAuthenticationService(gameConfig.userInfo.proxy, UUID.randomUUID().toString())).createMinecraftSessionService();
+         this.session = gameConfig.userInfo.session;
+         logger.info("Setting user: " + this.session.getUsername());
+-        logger.info("(Session ID is " + this.session.getSessionID() + ")");
+         this.isDemo = gameConfig.gameInfo.isDemo;
+         this.displayWidth = gameConfig.displayInfo.width > 0 ? gameConfig.displayInfo.width : 1;
+         this.displayHeight = gameConfig.displayInfo.height > 0 ? gameConfig.displayInfo.height : 1;
+@@ -321,13 +324,16 @@
+     public void run()
+     {
+         this.running = true;
++        gdbg("[GPU-DBG] run() entered");
+ 
+         try
+         {
+             this.startGame();
++            gdbg("[GPU-DBG] startGame() completed successfully");
+         }
+         catch (Throwable throwable)
+         {
++            System.err.println("[GPU-DBG] startGame() THREW: " + throwable); throwable.printStackTrace(System.err); System.err.flush();
+             CrashReport crashreport = CrashReport.makeCrashReport(throwable, "Initializing game");
+             crashreport.makeCategory("Initialization");
+             this.displayCrashReport(this.addGraphicsAndWorldToCrashReport(crashreport));
+@@ -336,6 +342,7 @@
+ 
+         while (true)
+         {
++            gdbg("[GPU-DBG] entering main game loop");
+             try
+             {
+                 while (this.running)
+@@ -388,9 +395,11 @@
+         }
+     }
+ 
+-    private void startGame() throws LWJGLException, IOException
+-    {
++    private void startGame() throws IOException
++    {
++        gdbg("[GPU-DBG] startGame() begin");
+         this.gameSettings = new GameSettings(this, this.mcDataDir);
++        gdbg("[GPU-DBG] GameSettings loaded");
+         this.defaultResourcePacks.add(this.mcDefaultResourcePack);
+         this.startTimerHackThread();
+ 
+@@ -400,28 +409,50 @@
+             this.displayHeight = this.gameSettings.overrideHeight;
+         }
+ 
+-        logger.info("LWJGL Version: " + Sys.getVersion());
++        logger.info("LWJGL Version: " + org.lwjgl.Version.getVersion());
++        gdbg("[GPU-DBG] WindowManager.init()");
++        WindowManager.init();
++        gdbg("[GPU-DBG] createDisplay()");
++        this.createDisplay();
++        gdbg("[GPU-DBG] setWindowIcon()");
+         this.setWindowIcon();
+-        this.setInitialDisplayMode();
+-        this.createDisplay();
++        gdbg("[GPU-DBG] OpenGlHelper.initializeTextures()");
+         OpenGlHelper.initializeTextures();
++        gdbg("[GPU-DBG] CoreShaders.init()");
++        plutonium.gpu.CoreShaders.init();
++        gdbg("[GPU-DBG] Framebuffer " + this.displayWidth + "x" + this.displayHeight);
+         this.framebufferMc = new Framebuffer(this.displayWidth, this.displayHeight, true);
+         this.framebufferMc.setFramebufferColor(0.0F, 0.0F, 0.0F, 0.0F);
++        if (false) {
++            // Second physical buffer for the present-thread ping/pong.
++            this.framebufferMcA = this.framebufferMc;
++            this.framebufferMcB = new Framebuffer(this.displayWidth, this.displayHeight, true);
++            this.framebufferMcB.setFramebufferColor(0.0F, 0.0F, 0.0F, 0.0F);
++        }
+         this.registerMetadataSerializers();
++        gdbg("[GPU-DBG] Resource setup");
+         this.mcResourcePackRepository = new ResourcePackRepository(this.fileResourcepacks, new File(this.mcDataDir, "server-resource-packs"), this.mcDefaultResourcePack, this.metadataSerializer_, this.gameSettings);
+         this.mcResourceManager = new SimpleReloadableResourceManager(this.metadataSerializer_);
+         this.mcLanguageManager = new LanguageManager(this.metadataSerializer_, this.gameSettings.language);
+         this.mcResourceManager.registerReloadListener(this.mcLanguageManager);
++        gdbg("[GPU-DBG] refreshResources()");
+         this.refreshResources();
++        gdbg("[GPU-DBG] TextureManager");
+         this.renderEngine = new TextureManager(this.mcResourceManager);
+         this.mcResourceManager.registerReloadListener(this.renderEngine);
+-        this.drawSplashScreen(this.renderEngine);
++        gdbg("[GPU-DBG] drawSplashScreen()");
++        this.updateSplash(0.1F);
++        gdbg("[GPU-DBG] drawSplashScreen() done");
+         this.initStream();
+         this.skinManager = new SkinManager(this.renderEngine, new File(this.fileAssets, "skins"), this.sessionService);
+         this.saveLoader = new AnvilSaveConverter(new File(this.mcDataDir, "saves"));
+         this.mcSoundHandler = new SoundHandler(this.mcResourceManager, this.gameSettings);
+         this.mcResourceManager.registerReloadListener(this.mcSoundHandler);
++        this.updateSplash(0.25F);
+         this.mcMusicTicker = new MusicTicker(this);
++        // Pump macOS event loop during long init — failure to do so causes
++        // glfwPollEvents() to block indefinitely when the game loop starts.
++        WindowManager.pumpEvents();
+         this.fontRendererObj = new FontRenderer(this.gameSettings, new ResourceLocation("textures/font/ascii.png"), this.renderEngine, false);
+ 
+         if (this.gameSettings.language != null)
+@@ -435,6 +466,7 @@
+         this.mcResourceManager.registerReloadListener(this.standardGalacticFontRenderer);
+         this.mcResourceManager.registerReloadListener(new GrassColorReloadListener());
+         this.mcResourceManager.registerReloadListener(new FoliageColorReloadListener());
++        this.updateSplash(0.4F);
+         AchievementList.openInventory.setStatStringFormatter(new IStatStringFormat()
+         {
+             public String formatString(String p_74535_1_)
+@@ -463,6 +495,7 @@
+         GlStateManager.loadIdentity();
+         GlStateManager.matrixMode(5888);
+         this.checkGLError("Startup");
++        gdbg("[GPU-DBG] TextureMap + models");
+         this.textureMapBlocks = new TextureMap("textures");
+         this.textureMapBlocks.setMipmapLevels(this.gameSettings.mipmapLevels);
+         this.renderEngine.loadTickableTexture(TextureMap.locationBlocksTexture, this.textureMapBlocks);
+@@ -470,6 +503,9 @@
+         this.textureMapBlocks.setBlurMipmapDirect(false, this.gameSettings.mipmapLevels > 0);
+         this.modelManager = new ModelManager(this.textureMapBlocks);
+         this.mcResourceManager.registerReloadListener(this.modelManager);
++        this.updateSplash(0.7F);
++        gdbg("[GPU-DBG] Renderers");
++        WindowManager.pumpEvents(); // keep macOS event loop alive
+         this.renderItem = new RenderItem(this.renderEngine, this.modelManager);
+         this.renderManager = new RenderManager(this.renderEngine, this.renderItem);
+         this.itemRenderer = new ItemRenderer(this);
+@@ -480,12 +516,21 @@
+         this.mcResourceManager.registerReloadListener(this.blockRenderDispatcher);
+         this.renderGlobal = new RenderGlobal(this);
+         this.mcResourceManager.registerReloadListener(this.renderGlobal);
++        this.updateSplash(0.9F);
+         this.guiAchievement = new GuiAchievement(this);
+         GlStateManager.viewport(0, 0, this.displayWidth, this.displayHeight);
++        gdbg("[GPU-DBG] Display: " + this.displayWidth + "x" + this.displayHeight +
++            " FB: " + WindowManager.getWidth() + "x" + WindowManager.getHeight() +
++            " Win: " + WindowManager.getWindowWidth() + "x" + WindowManager.getWindowHeight() +
++            " Scale: " + WindowManager.getScaleFactor());
+         this.effectRenderer = new EffectRenderer(this.theWorld, this.renderEngine);
+         this.checkGLError("Post startup");
+         this.ingameGUI = new GuiIngame(this);
+-
++        gdbg("[GPU-DBG] Plutonium.init()");
++        WindowManager.pumpEvents(); // keep macOS event loop alive
++        plutonium.Plutonium.getInstance().init();
++        gdbg("[GPU-DBG] Plutonium.init() done");
++        gdbg("[GPU-DBG] displayGuiScreen(GuiMainMenu)");
+         if (this.serverName != null)
+         {
+             this.displayGuiScreen(new GuiConnecting(new GuiMainMenu(), this, this.serverName, this.serverPort));
+@@ -494,6 +539,7 @@
+         {
+             this.displayGuiScreen(new GuiMainMenu());
+         }
++        gdbg("[GPU-DBG] displayGuiScreen done");
+ 
+         this.renderEngine.deleteTexture(this.mojangLogo);
+         this.mojangLogo = null;
+@@ -506,15 +552,16 @@
+ 
+         try
+         {
+-            Display.setVSyncEnabled(this.gameSettings.enableVsync);
+-        }
+-        catch (OpenGLException var2)
++            WindowManager.setVSyncEnabled(this.gameSettings.enableVsync);
++        }
++        catch (Exception var2)
+         {
+             this.gameSettings.enableVsync = false;
+             this.gameSettings.saveOptions();
+         }
+ 
+         this.renderGlobal.makeEntityOutlineShader();
++        gdbg("[GPU-DBG] startGame() END — entering main loop");
+     }
+ 
+     private void registerMetadataSerializers()
+@@ -539,50 +586,40 @@
+         }
+     }
+ 
+-    private void createDisplay() throws LWJGLException
+-    {
+-        Display.setResizable(true);
+-        Display.setTitle("Minecraft 1.8.9");
+-
+-        try
+-        {
+-            Display.create((new PixelFormat()).withDepthBits(24));
+-        }
+-        catch (LWJGLException lwjglexception)
+-        {
+-            logger.error((String)"Couldn\'t set pixel format", (Throwable)lwjglexception);
+-
+-            try
+-            {
+-                Thread.sleep(1000L);
+-            }
+-            catch (InterruptedException var3)
+-            {
+-                ;
+-            }
+-
+-            if (this.fullscreen)
+-            {
+-                this.updateDisplayMode();
+-            }
+-
+-            Display.create();
+-        }
+-    }
+-
+-    private void setInitialDisplayMode() throws LWJGLException
+-    {
++    private void createDisplay()
++    {
++        if ("Borderless".equals(System.getProperty("plutonium.windowMode")))
++        {
++            this.displayWidth = Math.max(1, WindowManager.getDesktopWidth());
++            this.displayHeight = Math.max(1, WindowManager.getDesktopHeight());
++        }
++
++        WindowManager.setTitle("Minecraft 1.8.9");
++
+         if (this.fullscreen)
+         {
+-            Display.setFullscreen(true);
+-            DisplayMode displaymode = Display.getDisplayMode();
+-            this.displayWidth = Math.max(1, displaymode.getWidth());
+-            this.displayHeight = Math.max(1, displaymode.getHeight());
++            WindowManager.create(this.displayWidth, this.displayHeight, 24, 0);
++            WindowManager.setFullscreen(true);
++            // Render at logical window size, not the HiDPI framebuffer size. On a 2x
++            // Retina display getWidth() is 2x getWindowWidth(); rendering the whole frame
++            // at 2x is 4x the fragment cost for no visible benefit in MC 1.8.9. We render
++            // into a logical-size FBO and upscale-blit it to the real framebuffer at present.
++            int w = WindowManager.getWindowWidth();
++            int h = WindowManager.getWindowHeight();
++            this.displayWidth = Math.max(1, w);
++            this.displayHeight = Math.max(1, h);
+         }
+         else
+         {
+-            Display.setDisplayMode(new DisplayMode(this.displayWidth, this.displayHeight));
+-        }
++            WindowManager.create(this.displayWidth, this.displayHeight, 24, 0);
++            this.displayWidth = Math.max(1, WindowManager.getWindowWidth());
++            this.displayHeight = Math.max(1, WindowManager.getWindowHeight());
++        }
++    }
++
++    private void setInitialDisplayMode()
++    {
++        // Handled by createDisplay() in LWJGL 3 migration
+     }
+ 
+     private void setWindowIcon()
+@@ -601,7 +638,7 @@
+ 
+                 if (inputstream != null && inputstream1 != null)
+                 {
+-                    Display.setIcon(new ByteBuffer[] {this.readImageToBuffer(inputstream), this.readImageToBuffer(inputstream1)});
++                    WindowManager.setIcon(new ByteBuffer[] {this.readImageToBuffer(inputstream), this.readImageToBuffer(inputstream1)});
+                 }
+             }
+             catch (IOException ioexception)
+@@ -753,60 +790,44 @@
+         return bytebuffer;
+     }
+ 
+-    private void updateDisplayMode() throws LWJGLException
+-    {
+-        Set<DisplayMode> set = Sets.<DisplayMode>newHashSet();
+-        Collections.addAll(set, Display.getAvailableDisplayModes());
+-        DisplayMode displaymode = Display.getDesktopDisplayMode();
+-
+-        if (!set.contains(displaymode) && Util.getOSType() == Util.EnumOS.OSX)
+-        {
+-            label53:
+-
+-            for (DisplayMode displaymode1 : macDisplayModes)
+-            {
+-                boolean flag = true;
+-
+-                for (DisplayMode displaymode2 : set)
+-                {
+-                    if (displaymode2.getBitsPerPixel() == 32 && displaymode2.getWidth() == displaymode1.getWidth() && displaymode2.getHeight() == displaymode1.getHeight())
+-                    {
+-                        flag = false;
+-                        break;
+-                    }
+-                }
+-
+-                if (!flag)
+-                {
+-                    Iterator iterator = set.iterator();
+-                    DisplayMode displaymode3;
+-
+-                    while (true)
+-                    {
+-                        if (!iterator.hasNext())
+-                        {
+-                            continue label53;
+-                        }
+-
+-                        displaymode3 = (DisplayMode)iterator.next();
+-
+-                        if (displaymode3.getBitsPerPixel() == 32 && displaymode3.getWidth() == displaymode1.getWidth() / 2 && displaymode3.getHeight() == displaymode1.getHeight() / 2)
+-                        {
+-                            break;
+-                        }
+-                    }
+-
+-                    displaymode = displaymode3;
+-                }
+-            }
+-        }
+-
+-        Display.setDisplayMode(displaymode);
+-        this.displayWidth = displaymode.getWidth();
+-        this.displayHeight = displaymode.getHeight();
+-    }
+-
+-    private void drawSplashScreen(TextureManager textureManagerInstance) throws LWJGLException
++    private void updateDisplayMode()
++    {
++        this.displayWidth = WindowManager.getDesktopWidth();
++        this.displayHeight = WindowManager.getDesktopHeight();
++        WindowManager.setDisplayMode(this.displayWidth, this.displayHeight);
++    }
++
++    /**
++     * Redraw the loading splash at the given progress (0..1). The splash is the only thing
++     * on screen until startGame() finishes, and the window can still change size after
++     * creation (the OS settling it, or the user resizing), so adopt the live window size
++     * first; otherwise the stale-sized frame leaves part of the window undrawn.
++     */
++    private void updateSplash(float progress)
++    {
++        for (int attempt = 0; attempt < 2; ++attempt)
++        {
++            WindowManager.pumpEvents();
++            int w = Math.max(1, WindowManager.getWindowWidth());
++            int h = Math.max(1, WindowManager.getWindowHeight());
++            boolean resized = w != this.displayWidth || h != this.displayHeight;
++
++            if (resized)
++            {
++                this.resize(w, h);
++            }
++
++            this.drawSplashScreen(progress);
++
++            // A resize only reaches the swapchain on the next present, so draw once more.
++            if (!resized)
++            {
++                break;
++            }
++        }
++    }
++
++    private void drawSplashScreen(float progress)
+     {
+         ScaledResolution scaledresolution = new ScaledResolution(this);
+         int i = scaledresolution.getScaleFactor();
+@@ -821,36 +842,113 @@
+         GlStateManager.disableLighting();
+         GlStateManager.disableFog();
+         GlStateManager.disableDepth();
++        // Redraws after startGame() enables alpha testing would otherwise discard the faint
++        // background gradient and glow halo (alpha < 0.1), leaving a hard-edged band.
++        GlStateManager.disableAlpha();
++        GlStateManager.enableBlend();
++        GlStateManager.disableTexture2D();
++        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
++
++        int sw = scaledresolution.getScaledWidth();
++        int sh = scaledresolution.getScaledHeight();
++        int cx = sw / 2;
++        int cy = sh / 2 - 20;
++
++        Gui.drawRect(0, 0, sw, sh, 0xFF090B16);
++
++        drawSplashGradientRect(0, 0, sw, sh, 0x205D50F0, 0x00090B16);
++
++        int segments = 80;
++        float[][] orbits = {{90.0f, 38.0f, 0.0f}, {78.0f, 55.0f, 1.05f}, {95.0f, 32.0f, 2.1f}};
++        for (float[] orbit : orbits)
++        {
++            float rx = orbit[0];
++            float ry = orbit[1];
++            float tilt = orbit[2];
++            float cos = (float)Math.cos(tilt);
++            float sin = (float)Math.sin(tilt);
++            // Wide/smooth lines unsupported on Metal/MoltenVK (clamped to 1px).
++            Tessellator loopTess = Tessellator.getInstance();
++            WorldRenderer loopWR = loopTess.getWorldRenderer();
++            loopWR.begin(2, net.minecraft.client.renderer.vertex.DefaultVertexFormats.POSITION_COLOR);
++            for (int s = 0; s < segments; s++)
++            {
++                float angle = (float)(s * 2 * Math.PI / segments);
++                float ox = rx * (float)Math.cos(angle);
++                float oy = ry * (float)Math.sin(angle);
++                float fx = ox * cos - oy * sin;
++                float fy = ox * sin + oy * cos;
++                float t = (float)s / segments;
++                float a = 0.35f + 0.5f * (float)Math.sin(t * Math.PI);
++                loopWR.pos(cx + fx, cy + fy, 0.0F).color(0.365f, 0.314f, 0.94f, a).endVertex();
++            }
++            loopTess.draw();
++        }
++
++        GlStateManager.shadeModel(7425);
++        Tessellator tess = Tessellator.getInstance();
++        WorldRenderer wr = tess.getWorldRenderer();
++        int glowLayers = 3;
++        float[] glowRadii = {22.0f, 14.0f, 6.0f};
++        float[][] glowColors = {
++            {0.365f, 0.314f, 0.94f, 0.12f},
++            {0.494f, 0.42f, 1.0f, 0.35f},
++            {0.933f, 0.925f, 1.0f, 0.9f}
++        };
++        for (int g = 0; g < glowLayers; g++)
++        {
++            float r = glowRadii[g];
++            wr.begin(6, DefaultVertexFormats.POSITION_COLOR);
++            wr.pos(cx, cy, 0).color(glowColors[g][0], glowColors[g][1], glowColors[g][2], glowColors[g][3]).endVertex();
++            for (int s = 0; s <= segments; s++)
++            {
++                float angle = (float)(s * 2 * Math.PI / segments);
++                wr.pos(cx + r * Math.cos(angle), cy + r * Math.sin(angle), 0).color(glowColors[g][0], glowColors[g][1], glowColors[g][2], 0.0f).endVertex();
++            }
++            tess.draw();
++        }
++        GlStateManager.shadeModel(7424);
++
++        int textY = cy + 70;
++        int letterH = 5;
++        int scale = 3;
++        int[][] P = {{0,0},{0,1},{0,2},{0,3},{0,4},{1,0},{2,0},{2,1},{1,1}};
++        int[][] L = {{0,0},{0,1},{0,2},{0,3},{0,4},{1,4},{2,4}};
++        int[][] U = {{0,0},{0,1},{0,2},{0,3},{0,4},{1,4},{2,4},{2,0},{2,1},{2,2},{2,3}};
++        int[][] T = {{0,0},{1,0},{2,0},{1,1},{1,2},{1,3},{1,4}};
++        int[][] O = {{0,0},{0,1},{0,2},{0,3},{0,4},{1,0},{2,0},{1,4},{2,4},{2,1},{2,2},{2,3}};
++        int[][] N = {{0,0},{0,1},{0,2},{0,3},{0,4},{1,1},{1,2},{1,3},{2,0},{2,1},{2,2},{2,3},{2,4}};
++        int[][] I_L = {{0,0},{1,0},{2,0},{1,1},{1,2},{1,3},{1,4},{0,4},{2,4}};
++        int[][] M = {{0,0},{0,1},{0,2},{0,3},{0,4},{1,1},{2,2},{3,1},{4,0},{4,1},{4,2},{4,3},{4,4}};
++        int[][][] letters = {P, L, U, T, O, N, I_L, U, M};
++        int[] letterWidths = {3, 3, 3, 3, 3, 3, 3, 3, 5};
++        int gap = 2;
++        int totalW = 0;
++        for (int w : letterWidths) totalW += (w + gap) * scale;
++        totalW -= gap * scale;
++        int startX = cx - totalW / 2;
++        int px = startX;
++        for (int li = 0; li < letters.length; li++)
++        {
++            for (int[] dot : letters[li])
++            {
++                int dx = px + dot[0] * scale;
++                int dy = textY + dot[1] * scale;
++                Gui.drawRect(dx, dy, dx + scale, dy + scale, 0xFFEEECFF);
++            }
++            px += (letterWidths[li] + gap) * scale;
++        }
++
++        int barW = sw / 3;
++        int barH = 3;
++        int barX = cx - barW / 2;
++        int barY = textY + (letterH + 4) * scale;
++        Gui.drawRect(barX, barY, barX + barW, barY + barH, 0x33FFFFFF);
++        int fillW = (int)(barW * MathHelper.clamp_float(progress, 0.0F, 1.0F));
++        drawSplashGradientRectH(barX, barY, barX + fillW, barY + barH, 0xFF5D50F0, 0xFF3C31C0);
++
+         GlStateManager.enableTexture2D();
+-        InputStream inputstream = null;
+-
+-        try
+-        {
+-            inputstream = this.mcDefaultResourcePack.getInputStream(locationMojangPng);
+-            this.mojangLogo = textureManagerInstance.getDynamicTextureLocation("logo", new DynamicTexture(ImageIO.read(inputstream)));
+-            textureManagerInstance.bindTexture(this.mojangLogo);
+-        }
+-        catch (IOException ioexception)
+-        {
+-            logger.error((String)("Unable to load logo: " + locationMojangPng), (Throwable)ioexception);
+-        }
+-        finally
+-        {
+-            IOUtils.closeQuietly(inputstream);
+-        }
+-
+-        Tessellator tessellator = Tessellator.getInstance();
+-        WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+-        worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX_COLOR);
+-        worldrenderer.pos(0.0D, (double)this.displayHeight, 0.0D).tex(0.0D, 0.0D).color(255, 255, 255, 255).endVertex();
+-        worldrenderer.pos((double)this.displayWidth, (double)this.displayHeight, 0.0D).tex(0.0D, 0.0D).color(255, 255, 255, 255).endVertex();
+-        worldrenderer.pos((double)this.displayWidth, 0.0D, 0.0D).tex(0.0D, 0.0D).color(255, 255, 255, 255).endVertex();
+-        worldrenderer.pos(0.0D, 0.0D, 0.0D).tex(0.0D, 0.0D).color(255, 255, 255, 255).endVertex();
+-        tessellator.draw();
+-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+-        int j = 256;
+-        int k = 256;
+-        this.func_181536_a((scaledresolution.getScaledWidth() - j) / 2, (scaledresolution.getScaledHeight() - k) / 2, 0, 0, j, k, 255, 255, 255, 255);
++        GlStateManager.disableBlend();
+         GlStateManager.disableLighting();
+         GlStateManager.disableFog();
+         framebuffer.unbindFramebuffer();
+@@ -858,6 +956,43 @@
+         GlStateManager.enableAlpha();
+         GlStateManager.alphaFunc(516, 0.1F);
+         this.updateDisplay();
++        framebuffer.deleteFramebuffer();   // destruction is fenced, safe after present
++    }
++
++    private void drawSplashGradientRect(int left, int top, int right, int bottom, int topColor, int bottomColor)
++    {
++        float aT = (topColor >> 24 & 255) / 255f, rT = (topColor >> 16 & 255) / 255f;
++        float gT = (topColor >> 8 & 255) / 255f, bT = (topColor & 255) / 255f;
++        float aB = (bottomColor >> 24 & 255) / 255f, rB = (bottomColor >> 16 & 255) / 255f;
++        float gB = (bottomColor >> 8 & 255) / 255f, bB = (bottomColor & 255) / 255f;
++        GlStateManager.shadeModel(7425);
++        Tessellator tess = Tessellator.getInstance();
++        WorldRenderer wr = tess.getWorldRenderer();
++        wr.begin(7, DefaultVertexFormats.POSITION_COLOR);
++        wr.pos(right, top, 0).color(rT, gT, bT, aT).endVertex();
++        wr.pos(left, top, 0).color(rT, gT, bT, aT).endVertex();
++        wr.pos(left, bottom, 0).color(rB, gB, bB, aB).endVertex();
++        wr.pos(right, bottom, 0).color(rB, gB, bB, aB).endVertex();
++        tess.draw();
++        GlStateManager.shadeModel(7424);
++    }
++
++    private void drawSplashGradientRectH(int left, int top, int right, int bottom, int leftColor, int rightColor)
++    {
++        float aL = (leftColor >> 24 & 255) / 255f, rL = (leftColor >> 16 & 255) / 255f;
++        float gL = (leftColor >> 8 & 255) / 255f, bL = (leftColor & 255) / 255f;
++        float aR = (rightColor >> 24 & 255) / 255f, rR = (rightColor >> 16 & 255) / 255f;
++        float gR = (rightColor >> 8 & 255) / 255f, bR = (rightColor & 255) / 255f;
++        GlStateManager.shadeModel(7425);
++        Tessellator tess = Tessellator.getInstance();
++        WorldRenderer wr = tess.getWorldRenderer();
++        wr.begin(7, DefaultVertexFormats.POSITION_COLOR);
++        wr.pos(left, top, 0).color(rL, gL, bL, aL).endVertex();
++        wr.pos(left, bottom, 0).color(rL, gL, bL, aL).endVertex();
++        wr.pos(right, bottom, 0).color(rR, gR, bR, aR).endVertex();
++        wr.pos(right, top, 0).color(rR, gR, bR, aR).endVertex();
++        tess.draw();
++        GlStateManager.shadeModel(7424);
+     }
+ 
+     public void func_181536_a(int p_181536_1_, int p_181536_2_, int p_181536_3_, int p_181536_4_, int p_181536_5_, int p_181536_6_, int p_181536_7_, int p_181536_8_, int p_181536_9_, int p_181536_10_)
+@@ -880,8 +1015,11 @@
+ 
+     public void displayGuiScreen(GuiScreen guiScreenIn)
+     {
++        String screenName = guiScreenIn != null ? guiScreenIn.getClass().getSimpleName() : "null";
++        gdbg("[GPU-DBG] displayGuiScreen(" + screenName + ")");
+         if (this.currentScreen != null)
+         {
++            gdbg("[GPU-DBG]   closing current: " + this.currentScreen.getClass().getSimpleName());
+             this.currentScreen.onGuiClosed();
+         }
+ 
+@@ -908,25 +1046,34 @@
+             ScaledResolution scaledresolution = new ScaledResolution(this);
+             int i = scaledresolution.getScaledWidth();
+             int j = scaledresolution.getScaledHeight();
+-            ((GuiScreen)guiScreenIn).setWorldAndResolution(this, i, j);
++            gdbg("[GPU-DBG]   setWorldAndResolution(" + i + "x" + j + ")");
++            try {
++                ((GuiScreen)guiScreenIn).setWorldAndResolution(this, i, j);
++            } catch (Throwable t) {
++                System.err.println("[GPU-DBG]   setWorldAndResolution THREW: " + t); t.printStackTrace(System.err); System.err.flush();
++                throw t;
++            }
++            gdbg("[GPU-DBG]   setWorldAndResolution done");
+             this.skipRenderWorld = false;
+         }
+         else
+         {
+             this.mcSoundHandler.resumeSounds();
+             this.setIngameFocus();
+-        }
++            this.rightClickDelayTimer = 4;
++        }
++        gdbg("[GPU-DBG] displayGuiScreen done");
+     }
+ 
+     private void checkGLError(String message)
+     {
+         if (this.enableGLErrorChecking)
+         {
+-            int i = GL11.glGetError();
++            int i = GlStateManager.glGetError();
+ 
+             if (i != 0)
+             {
+-                String s = GLU.gluErrorString(i);
++                String s = "GL Error " + i;
+                 logger.error("########## GL ERROR ##########");
+                 logger.error("@ " + message);
+                 logger.error(i + ": " + s);
+@@ -938,6 +1085,7 @@
+     {
+         try
+         {
++            plutonium.Plutonium.getInstance().shutdown();
+             this.stream.shutdownStream();
+             logger.info("Stopping!");
+ 
+@@ -954,7 +1102,7 @@
+         }
+         finally
+         {
+-            Display.destroy();
++            WindowManager.destroy();
+ 
+             if (!this.hasCrashed)
+             {
+@@ -965,12 +1113,37 @@
+         System.gc();
+     }
+ 
++    private long dbgFrameCount = 0;
++    /** GPU bring-up debug logging (startup trace + per-frame/per-second perf line). Off by
++     *  default; enable with -Dplutonium.gpudebug=true. */
++    public static final boolean GPU_DEBUG = Boolean.getBoolean("plutonium.gpudebug");
++    /** Gated debug print used for the one-shot GPU bring-up trace. */
++    private static void gdbg(String msg) { if (GPU_DEBUG) { System.err.println(msg); System.err.flush(); } }
++    // PERF: temporary frame-region timers (ns accumulated per second)
++    private long perfRenderNs = 0, perfBlitNs = 0, perfSwapNs = 0, perfPollNs = 0, perfRealSwapNs = 0;
++    private long perfChunkDraws = 0, perfEntityDraws = 0, perfImmDraws = 0, perfGuiDraws = 0;
++    private long perfWc = 0, perfWt = 0, perfWtc = 0, perfWb = 0;
++    private long perfNsSky = 0, perfNsClouds = 0, perfNsSetup = 0, perfNsChunks = 0;
++    private long perfNsEntities = 0, perfNsParticles = 0, perfNsHand = 0;
++    private long perfModelFlushes = 0, perfFontQuads = 0, perfUniSyncs = 0, perfMvpUploads = 0;
++    private long perfGlyphHits = 0, perfGlyphMisses = 0;
++    private long perfNsFrameInit = 0, perfNsMouse = 0, perfNsClearBind = 0, perfNsPostWorld = 0, perfNsNtFlush = 0;
++    private long perfNsEntCpu = 0, perfNsModelFlush = 0, perfNsTile = 0, perfCEnt = 0, perfCTile = 0;
++    private long perfArrowQuads = 0, perfItemQuads = 0;
++    public static long perfWorldNs = 0, perfGuiNs = 0;
+     private void runGameLoop() throws IOException
+     {
++        ++dbgFrameCount;
++        if (GPU_DEBUG && dbgFrameCount <= 3) {
++            System.err.println("[GPU-LOOP] frame=" + dbgFrameCount + " t=" + getSystemTime());
++            System.err.flush();
++        }
+         long i = System.nanoTime();
+         this.mcProfiler.startSection("root");
+ 
+-        if (Display.isCreated() && Display.isCloseRequested())
++        if (GPU_DEBUG && dbgFrameCount <= 3) { System.err.println("[T1]"); System.err.flush(); }
++
++        if (WindowManager.isCreated() && WindowManager.isCloseRequested())
+         {
+             this.shutdown();
+         }
+@@ -990,9 +1163,21 @@
+ 
+         synchronized (this.scheduledTasks)
+         {
++            long drainStart = plutonium.NetStats.ENABLED ? System.nanoTime() : 0L;
++
++            if (plutonium.NetStats.ENABLED)
++            {
++                plutonium.NetStats.recordTaskQueueDepth(this.scheduledTasks.size());
++            }
++
+             while (!this.scheduledTasks.isEmpty())
+             {
+                 Util.func_181617_a((FutureTask)this.scheduledTasks.poll(), logger);
++            }
++
++            if (plutonium.NetStats.ENABLED)
++            {
++                plutonium.NetStats.recordDrain(System.nanoTime() - drainStart);
+             }
+         }
+ 
+@@ -1000,17 +1185,22 @@
+         long l = System.nanoTime();
+         this.mcProfiler.startSection("tick");
+ 
++        if (GPU_DEBUG && dbgFrameCount <= 3) { System.err.println("[T2] ticks=" + this.timer.elapsedTicks); System.err.flush(); }
++
+         for (int j = 0; j < this.timer.elapsedTicks; ++j)
+         {
+             this.runTick();
+         }
+ 
++        if (GPU_DEBUG && dbgFrameCount <= 3) { System.err.println("[T3] ticks done"); System.err.flush(); }
+         this.mcProfiler.endStartSection("preRenderErrors");
+         long i1 = System.nanoTime() - l;
+         this.checkGLError("Pre render");
+         this.mcProfiler.endStartSection("sound");
+         this.mcSoundHandler.setListener(this.thePlayer, this.timer.renderPartialTicks);
+         this.mcProfiler.endSection();
++        if (GPU_DEBUG && dbgFrameCount <= 3) { System.err.println("[T4] pre-render"); System.err.flush(); }
++        long perfT0 = System.nanoTime();
+         this.mcProfiler.startSection("render");
+         GlStateManager.pushMatrix();
+         GlStateManager.clear(16640);
+@@ -1024,6 +1214,7 @@
+         }
+ 
+         this.mcProfiler.endSection();
++        plutonium.gpu.DrawStats.nsClearBind += System.nanoTime() - perfT0;
+ 
+         if (!this.skipRenderWorld)
+         {
+@@ -1054,21 +1245,42 @@
+         this.framebufferMc.unbindFramebuffer();
+         GlStateManager.popMatrix();
+         GlStateManager.pushMatrix();
+-        this.framebufferMc.framebufferRender(this.displayWidth, this.displayHeight);
++        long perfT1 = System.nanoTime();
++        // Blit framebufferMc into the screen target; updateDisplay() then blits the screen
++        // target to the acquired swapchain image and presents (VkRenderTargets.present).
++        this.framebufferMc.framebufferRender(WindowManager.getWidth(), WindowManager.getHeight());
+         GlStateManager.popMatrix();
+-        GlStateManager.pushMatrix();
+-        this.entityRenderer.renderStreamIndicator(this.timer.renderPartialTicks);
+-        GlStateManager.popMatrix();
++        long perfT2 = System.nanoTime();
++        if (GPU_DEBUG && dbgFrameCount <= 3) { System.err.println("[T5] pre-update"); System.err.flush(); }
+         this.mcProfiler.startSection("root");
+         this.updateDisplay();
+-        Thread.yield();
+-        this.mcProfiler.startSection("stream");
+-        this.mcProfiler.startSection("update");
+-        this.stream.func_152935_j();
+-        this.mcProfiler.endStartSection("submit");
+-        this.stream.func_152922_k();
+-        this.mcProfiler.endSection();
+-        this.mcProfiler.endSection();
++        long perfT3 = System.nanoTime();
++        this.perfChunkDraws += plutonium.gpu.DrawStats.chunk;
++        this.perfEntityDraws += plutonium.gpu.DrawStats.entity;
++        this.perfImmDraws += plutonium.gpu.DrawStats.immOther;
++        this.perfGuiDraws += plutonium.gpu.DrawStats.immGui;
++        perfWc += plutonium.gpu.DrawStats.immW_color; perfWt += plutonium.gpu.DrawStats.immW_tex;
++        perfWtc += plutonium.gpu.DrawStats.immW_texcol; perfWb += plutonium.gpu.DrawStats.immW_block;
++        perfNsSky += plutonium.gpu.DrawStats.nsSky; perfNsClouds += plutonium.gpu.DrawStats.nsClouds;
++        perfNsSetup += plutonium.gpu.DrawStats.nsSetup; perfNsChunks += plutonium.gpu.DrawStats.nsChunks;
++        perfNsEntities += plutonium.gpu.DrawStats.nsEntities; perfNsParticles += plutonium.gpu.DrawStats.nsParticles;
++        perfNsHand += plutonium.gpu.DrawStats.nsHand;
++        perfModelFlushes += plutonium.gpu.DrawStats.modelFlushes; perfFontQuads += plutonium.gpu.DrawStats.fontQuads;
++        perfUniSyncs += plutonium.gpu.DrawStats.uniformSyncs; perfMvpUploads += plutonium.gpu.DrawStats.mvpUploads;
++        perfGlyphHits += plutonium.gpu.DrawStats.glyphHits; perfGlyphMisses += plutonium.gpu.DrawStats.glyphMisses;
++        perfNsFrameInit += plutonium.gpu.DrawStats.nsFrameInit; perfNsMouse += plutonium.gpu.DrawStats.nsMouse;
++        perfNsClearBind += plutonium.gpu.DrawStats.nsClearBind; perfNsPostWorld += plutonium.gpu.DrawStats.nsPostWorld;
++        perfNsNtFlush += plutonium.gpu.DrawStats.nsNtFlush;
++        perfNsEntCpu += plutonium.gpu.DrawStats.nsEntCpu; perfNsModelFlush += plutonium.gpu.DrawStats.nsModelFlush;
++        perfNsTile += plutonium.gpu.DrawStats.nsTile;
++        perfCEnt += plutonium.gpu.DrawStats.cEnt; perfCTile += plutonium.gpu.DrawStats.cTile;
++        perfArrowQuads += plutonium.gpu.DrawStats.arrowQuads; perfItemQuads += plutonium.gpu.DrawStats.itemQuads;
++        plutonium.gpu.DrawStats.resetFrame();
++        this.perfRenderNs += perfT1 - perfT0;
++        this.perfBlitNs += perfT2 - perfT1;
++        this.perfSwapNs += perfT3 - perfT2;
++        this.perfRealSwapNs += plutonium.gpu.WindowManager.lastSwapNs;
++        this.perfPollNs += plutonium.gpu.WindowManager.lastPollNs;
+         this.checkGLError("Post render");
+         ++this.fpsCounter;
+         this.isGamePaused = this.isSingleplayer() && this.currentScreen != null && this.currentScreen.doesGuiPauseGame() && !this.theIntegratedServer.getPublic();
+@@ -1079,59 +1291,108 @@
+         while (getSystemTime() >= this.debugUpdateTime + 1000L)
+         {
+             debugFPS = this.fpsCounter;
++            int pf = Math.max(1, this.fpsCounter);
++            if (GPU_DEBUG) {
++            System.err.println("[GPU-DBG] fps=" + debugFPS + " ticks/s=" + this.timer.elapsedTicks +
++                " sysTime=" + getSystemTime() + " mouseQ=" + plutonium.gpu.MouseShim.debugQueueSize() +
++                " | render=" + (this.perfRenderNs/1000/pf) + "us submitWait=" + (this.perfBlitNs/1000/pf) +
++                "us swap=" + (this.perfSwapNs/1000/pf) + "us [glSwap=" + (this.perfRealSwapNs/1000/pf) +
++                "us poll=" + (this.perfPollNs/1000/pf) + "us] world=" + (perfWorldNs/1000/pf) +
++                "us gui=" + (perfGuiNs/1000/pf) + "us | draws/f chunk=" + (this.perfChunkDraws/pf) +
++                " entity=" + (this.perfEntityDraws/pf) + " immW=" + (this.perfImmDraws/pf) +
++                " immGui=" + (this.perfGuiDraws/pf) +
++                " total=" + ((this.perfChunkDraws+this.perfEntityDraws+this.perfImmDraws+this.perfGuiDraws)/pf) +
++                " | immW[color=" + (perfWc/pf) + " tex=" + (perfWt/pf) + " texcol=" + (perfWtc/pf) + " block=" + (perfWb/pf) + "]" +
++                " | wb[sky=" + (perfNsSky/1000/pf) + " clouds=" + (perfNsClouds/1000/pf) +
++                " setup=" + (perfNsSetup/1000/pf) + " chunks=" + (perfNsChunks/1000/pf) +
++                " ent=" + (perfNsEntities/1000/pf) + " part=" + (perfNsParticles/1000/pf) +
++                " hand=" + (perfNsHand/1000/pf) + "us]" +
++                " | cnt[mFlush=" + (perfModelFlushes/pf) + " fQuads=" + (perfFontQuads/pf) +
++                " uSync=" + (perfUniSyncs/pf) + " mvpUp=" + (perfMvpUploads/pf) +
++                " gcHit=" + (perfGlyphHits/pf) + " gcMiss=" + (perfGlyphMisses/pf) + "]" +
++                " | xtra[init=" + (perfNsFrameInit/1000/pf) + " mouse=" + (perfNsMouse/1000/pf) +
++                " clear=" + (perfNsClearBind/1000/pf) + " post=" + (perfNsPostWorld/1000/pf) +
++                " nt=" + (perfNsNtFlush/1000/pf) +
++                " misc=" + ((this.perfRenderNs - perfWorldNs - perfGuiNs - perfNsFrameInit - perfNsMouse
++                             - perfNsClearBind - perfNsPostWorld - perfNsNtFlush)/1000/pf) + "us]" +
++                " | ent2[cpu=" + (perfNsEntCpu/1000/pf) + " mflush=" + (perfNsModelFlush/1000/pf) +
++                " tile=" + (perfNsTile/1000/pf) + "us nEnt=" + (perfCEnt/pf) + " nTile=" + (perfCTile/pf) + "]" +
++                " | batch[aQ=" + (perfArrowQuads/pf) + " iQ=" + (perfItemQuads/pf) + "]");
++            System.err.flush();
++            }
++            this.perfChunkDraws = 0; this.perfEntityDraws = 0; this.perfImmDraws = 0; this.perfGuiDraws = 0;
++            perfWc = 0; perfWt = 0; perfWtc = 0; perfWb = 0;
++            perfNsSky = 0; perfNsClouds = 0; perfNsSetup = 0; perfNsChunks = 0;
++            perfNsEntities = 0; perfNsParticles = 0; perfNsHand = 0;
++            perfModelFlushes = 0; perfFontQuads = 0; perfUniSyncs = 0; perfMvpUploads = 0;
++            perfGlyphHits = 0; perfGlyphMisses = 0;
++            perfNsFrameInit = 0; perfNsMouse = 0; perfNsClearBind = 0; perfNsPostWorld = 0; perfNsNtFlush = 0;
++            perfNsEntCpu = 0; perfNsModelFlush = 0; perfNsTile = 0; perfCEnt = 0; perfCTile = 0;
++            perfArrowQuads = 0; perfItemQuads = 0;
++            this.perfRenderNs = 0; this.perfBlitNs = 0; this.perfSwapNs = 0; this.perfRealSwapNs = 0; this.perfPollNs = 0;
++            perfWorldNs = 0; perfGuiNs = 0;
++            if (plutonium.NetStats.ENABLED)
++            {
++                plutonium.NetStats.printAndReset(this.getNetHandler() != null ? this.getNetHandler().getNetworkManager() : null);
++            }
++
+             this.debug = String.format("%d fps (%d chunk update%s) T: %s%s%s%s%s", new Object[] {Integer.valueOf(debugFPS), Integer.valueOf(RenderChunk.renderChunksUpdated), RenderChunk.renderChunksUpdated != 1 ? "s" : "", (float)this.gameSettings.limitFramerate == GameSettings.Options.FRAMERATE_LIMIT.getValueMax() ? "inf" : Integer.valueOf(this.gameSettings.limitFramerate), this.gameSettings.enableVsync ? " vsync" : "", this.gameSettings.fancyGraphics ? "" : " fast", this.gameSettings.clouds == 0 ? "" : (this.gameSettings.clouds == 1 ? " fast-clouds" : " fancy-clouds"), OpenGlHelper.useVbo() ? " vbo" : ""});
+             RenderChunk.renderChunksUpdated = 0;
+             this.debugUpdateTime += 1000L;
+             this.fpsCounter = 0;
+-            this.usageSnooper.addMemoryStatsToSnooper();
+-
+-            if (!this.usageSnooper.isSnooperRunning())
+-            {
+-                this.usageSnooper.startSnooper();
+-            }
++        }
++
++        if (plutonium.NetStats.ENABLED)
++        {
++            // Before the cap sleep, so this is frame work rather than deliberate idling
++            plutonium.NetStats.recordFrame(System.nanoTime() - i);
+         }
+ 
+         if (this.isFramerateLimitBelowMax())
+         {
+             this.mcProfiler.startSection("fpslimit_wait");
+-            Display.sync(this.getLimitFramerate());
++            WindowManager.sync(this.getLimitFramerate());
+             this.mcProfiler.endSection();
+         }
+ 
+         this.mcProfiler.endSection();
++        if (GPU_DEBUG && dbgFrameCount <= 5) {
++            System.err.println("[GPU-END] frame " + dbgFrameCount + " complete");
++            System.err.flush();
++        }
+     }
+ 
+     public void updateDisplay()
+     {
++        long t0 = System.nanoTime();
+         this.mcProfiler.startSection("display_update");
+-        Display.update();
++        WindowManager.update();
+         this.mcProfiler.endSection();
++        long t1 = System.nanoTime();
+         this.checkWindowResize();
++        if (GPU_DEBUG && dbgFrameCount <= 10) {
++            System.err.println("[GPU-UPD] swap took " + (t1-t0)/1000000 + "ms");
++            System.err.flush();
++        }
+     }
+ 
+     protected void checkWindowResize()
+     {
+-        if (!this.fullscreen && Display.wasResized())
+-        {
+-            int i = this.displayWidth;
+-            int j = this.displayHeight;
+-            this.displayWidth = Display.getWidth();
+-            this.displayHeight = Display.getHeight();
+-
+-            if (this.displayWidth != i || this.displayHeight != j)
+-            {
+-                if (this.displayWidth <= 0)
+-                {
+-                    this.displayWidth = 1;
+-                }
+-
+-                if (this.displayHeight <= 0)
+-                {
+-                    this.displayHeight = 1;
+-                }
+-
+-                this.resize(this.displayWidth, this.displayHeight);
+-            }
++        if (!this.fullscreen && WindowManager.wasResized())
++        {
++            int w = WindowManager.getWindowWidth();
++            int h = WindowManager.getWindowHeight();
++            this.pendingResizeWidth  = Math.max(1, w);
++            this.pendingResizeHeight = Math.max(1, h);
++        }
++        else if (this.pendingResizeWidth > 0)
++        {
++            // The user stopped dragging (wasResized() returned false) — now apply exactly once.
++            this.displayWidth  = this.pendingResizeWidth;
++            this.displayHeight = this.pendingResizeHeight;
++            this.pendingResizeWidth  = -1;
++            this.pendingResizeHeight = -1;
++            this.resize(this.displayWidth, this.displayHeight);
+         }
+     }
+ 
+@@ -1221,7 +1482,7 @@
+             GlStateManager.matrixMode(5888);
+             GlStateManager.loadIdentity();
+             GlStateManager.translate(0.0F, 0.0F, -2000.0F);
+-            GL11.glLineWidth(1.0F);
++            // lineWidth fixed at 1 under Vulkan
+             GlStateManager.disableTexture2D();
+             Tessellator tessellator = Tessellator.getInstance();
+             WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+@@ -1324,7 +1585,7 @@
+ 
+     public void setIngameFocus()
+     {
+-        if (Display.isActive())
++        if (WindowManager.isActive())
+         {
+             if (!this.inGameHasFocus)
+             {
+@@ -1332,6 +1593,19 @@
+                 this.mouseHelper.grabMouseCursor();
+                 this.displayGuiScreen((GuiScreen)null);
+                 this.leftClickCounter = 10000;
++
++                for (KeyBinding keybinding : this.gameSettings.keyBindings)
++                {
++                    int code = keybinding.getKeyCode();
++                    if (code > 0)
++                    {
++                        KeyBinding.setKeyBindState(code, KeyboardShim.isKeyDown(code));
++                    }
++                    else if (code < 0)
++                    {
++                        KeyBinding.setKeyBindState(code, MouseShim.isButtonDown(code + 100));
++                    }
++                }
+             }
+         }
+     }
+@@ -1387,6 +1661,7 @@
+ 
+     private void clickMouse()
+     {
++        plutonium.module.modules.CpsCounter.onLeftClick();
+         if (this.leftClickCounter <= 0)
+         {
+             this.thePlayer.swingItem();
+@@ -1406,6 +1681,7 @@
+                 {
+                     case ENTITY:
+                         this.playerController.attackEntity(this.thePlayer, this.objectMouseOver.entityHit);
++                        plutonium.module.modules.ComboCounter.onEntityHit();
+                         break;
+ 
+                     case BLOCK:
+@@ -1431,6 +1707,7 @@
+     @SuppressWarnings("incomplete-switch")
+     private void rightClickMouse()
+     {
++        plutonium.module.modules.CpsCounter.onRightClick();
+         if (!this.playerController.func_181040_m())
+         {
+             this.rightClickDelayTimer = 4;
+@@ -1506,37 +1783,18 @@
+             this.fullscreen = !this.fullscreen;
+             this.gameSettings.fullScreen = this.fullscreen;
+ 
++            WindowManager.setFullscreen(this.fullscreen);
++
+             if (this.fullscreen)
+             {
+-                this.updateDisplayMode();
+-                this.displayWidth = Display.getDisplayMode().getWidth();
+-                this.displayHeight = Display.getDisplayMode().getHeight();
+-
+-                if (this.displayWidth <= 0)
+-                {
+-                    this.displayWidth = 1;
+-                }
+-
+-                if (this.displayHeight <= 0)
+-                {
+-                    this.displayHeight = 1;
+-                }
++                this.displayWidth = Math.max(1, WindowManager.getWindowWidth());
++                this.displayHeight = Math.max(1, WindowManager.getWindowHeight());
+             }
+             else
+             {
+-                Display.setDisplayMode(new DisplayMode(this.tempDisplayWidth, this.tempDisplayHeight));
+-                this.displayWidth = this.tempDisplayWidth;
+-                this.displayHeight = this.tempDisplayHeight;
+-
+-                if (this.displayWidth <= 0)
+-                {
+-                    this.displayWidth = 1;
+-                }
+-
+-                if (this.displayHeight <= 0)
+-                {
+-                    this.displayHeight = 1;
+-                }
++                WindowManager.setDisplayMode(this.tempDisplayWidth, this.tempDisplayHeight);
++                this.displayWidth = Math.max(1, this.tempDisplayWidth);
++                this.displayHeight = Math.max(1, this.tempDisplayHeight);
+             }
+ 
+             if (this.currentScreen != null)
+@@ -1548,8 +1806,7 @@
+                 this.updateFramebufferSize();
+             }
+ 
+-            Display.setFullscreen(this.fullscreen);
+-            Display.setVSyncEnabled(this.gameSettings.enableVsync);
++            WindowManager.setVSyncEnabled(this.gameSettings.enableVsync);
+             this.updateDisplay();
+         }
+         catch (Exception exception)
+@@ -1685,12 +1942,12 @@
+         {
+             this.mcProfiler.endStartSection("mouse");
+ 
+-            while (Mouse.next())
+-            {
+-                int i = Mouse.getEventButton();
+-                KeyBinding.setKeyBindState(i - 100, Mouse.getEventButtonState());
+-
+-                if (Mouse.getEventButtonState())
++            while (MouseShim.next())
++            {
++                int i = MouseShim.getEventButton();
++                KeyBinding.setKeyBindState(i - 100, MouseShim.getEventButtonState());
++
++                if (MouseShim.getEventButtonState())
+                 {
+                     if (this.thePlayer.isSpectator() && i == 2)
+                     {
+@@ -1706,36 +1963,50 @@
+ 
+                 if (i1 <= 200L)
+                 {
+-                    int j = Mouse.getEventDWheel();
++                    int j = MouseShim.getEventDWheel();
+ 
+                     if (j != 0)
+                     {
+-                        if (this.thePlayer.isSpectator())
+-                        {
+-                            j = j < 0 ? -1 : 1;
+-
+-                            if (this.ingameGUI.getSpectatorGui().func_175262_a())
++                        if (!plutonium.module.modules.Zoom.handleScroll(j))
++                        {
++                            if (this.thePlayer.isSpectator())
+                             {
+-                                this.ingameGUI.getSpectatorGui().func_175259_b(-j);
++                                j = j < 0 ? -1 : 1;
++
++                                if (this.ingameGUI.getSpectatorGui().func_175262_a())
++                                {
++                                    this.ingameGUI.getSpectatorGui().func_175259_b(-j);
++                                }
++                                else
++                                {
++                                    float f = MathHelper.clamp_float(this.thePlayer.capabilities.getFlySpeed() + (float)j * 0.005F, 0.0F, 0.2F);
++                                    this.thePlayer.capabilities.setFlySpeed(f);
++                                }
+                             }
+                             else
+                             {
+-                                float f = MathHelper.clamp_float(this.thePlayer.capabilities.getFlySpeed() + (float)j * 0.005F, 0.0F, 0.2F);
+-                                this.thePlayer.capabilities.setFlySpeed(f);
++                                this.thePlayer.inventory.changeCurrentItem(j);
+                             }
+                         }
+-                        else
+-                        {
+-                            this.thePlayer.inventory.changeCurrentItem(j);
+-                        }
+                     }
+ 
+                     if (this.currentScreen == null)
+                     {
+-                        if (!this.inGameHasFocus && Mouse.getEventButtonState())
++                        if (!this.inGameHasFocus && MouseShim.getEventButtonState())
+                         {
+                             this.setIngameFocus();
+                         }
++
++                        // Plutonium HUD click routing (scaled coords, top-left origin).
++                        // Skipped while the cursor is grabbed (first-person): clicks then
++                        // arrive at screen centre and would trigger HUD elements by accident.
++                        if (MouseShim.getEventButtonState() && !MouseShim.isGrabbed())
++                        {
++                            ScaledResolution sr = new ScaledResolution(this);
++                            int mx = MouseShim.getEventX() * (int) sr.getScaledWidth() / this.displayWidth;
++                            int my = (int) sr.getScaledHeight() - MouseShim.getEventY() * (int) sr.getScaledHeight() / this.displayHeight - 1;
++                            plutonium.Plutonium.getInstance().onMouseClick(i, mx, my);
++                        }
+                     }
+                     else if (this.currentScreen != null)
+                     {
+@@ -1751,14 +2022,21 @@
+ 
+             this.mcProfiler.endStartSection("keyboard");
+ 
+-            while (Keyboard.next())
+-            {
+-                int k = Keyboard.getEventKey() == 0 ? Keyboard.getEventCharacter() + 256 : Keyboard.getEventKey();
+-                KeyBinding.setKeyBindState(k, Keyboard.getEventKeyState());
+-
+-                if (Keyboard.getEventKeyState())
++            while (KeyboardShim.next())
++            {
++                int k = KeyboardShim.getEventKey() == 0 ? KeyboardShim.getEventCharacter() + 256 : KeyboardShim.getEventKey();
++                KeyBinding.setKeyBindState(k, KeyboardShim.getEventKeyState());
++
++                if (KeyboardShim.getEventKeyState())
+                 {
+                     KeyBinding.onTick(k);
++
++                    // Plutonium module binds. Gated on there being no screen open, or a bind
++                    // would fire while typing it into chat or while rebinding it in the ClickGUI.
++                    if (this.currentScreen == null)
++                    {
++                        plutonium.Plutonium.getInstance().onKeyPress(k);
++                    }
+                 }
+ 
+                 if (this.debugCrashKeyPressTime > 0L)
+@@ -1768,19 +2046,19 @@
+                         throw new ReportedException(new CrashReport("Manually triggered debug crash", new Throwable()));
+                     }
+ 
+-                    if (!Keyboard.isKeyDown(46) || !Keyboard.isKeyDown(61))
++                    if (!KeyboardShim.isKeyDown(46) || !KeyboardShim.isKeyDown(61))
+                     {
+                         this.debugCrashKeyPressTime = -1L;
+                     }
+                 }
+-                else if (Keyboard.isKeyDown(46) && Keyboard.isKeyDown(61))
++                else if (KeyboardShim.isKeyDown(46) && KeyboardShim.isKeyDown(61))
+                 {
+                     this.debugCrashKeyPressTime = getSystemTime();
+                 }
+ 
+                 this.dispatchKeypresses();
+ 
+-                if (Keyboard.getEventKeyState())
++                if (KeyboardShim.getEventKeyState())
+                 {
+                     if (k == 62 && this.entityRenderer != null)
+                     {
+@@ -1798,68 +2076,68 @@
+                             this.displayInGameMenu();
+                         }
+ 
+-                        if (k == 32 && Keyboard.isKeyDown(61) && this.ingameGUI != null)
++                        if (k == 32 && KeyboardShim.isKeyDown(61) && this.ingameGUI != null)
+                         {
+                             this.ingameGUI.getChatGUI().clearChatMessages();
+                         }
+ 
+-                        if (k == 31 && Keyboard.isKeyDown(61))
++                        if (k == 31 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.refreshResources();
+                         }
+ 
+-                        if (k == 17 && Keyboard.isKeyDown(61))
++                        if (k == 17 && KeyboardShim.isKeyDown(61))
+                         {
+                             ;
+                         }
+ 
+-                        if (k == 18 && Keyboard.isKeyDown(61))
++                        if (k == 18 && KeyboardShim.isKeyDown(61))
+                         {
+                             ;
+                         }
+ 
+-                        if (k == 47 && Keyboard.isKeyDown(61))
++                        if (k == 47 && KeyboardShim.isKeyDown(61))
+                         {
+                             ;
+                         }
+ 
+-                        if (k == 38 && Keyboard.isKeyDown(61))
++                        if (k == 38 && KeyboardShim.isKeyDown(61))
+                         {
+                             ;
+                         }
+ 
+-                        if (k == 22 && Keyboard.isKeyDown(61))
++                        if (k == 22 && KeyboardShim.isKeyDown(61))
+                         {
+                             ;
+                         }
+ 
+-                        if (k == 20 && Keyboard.isKeyDown(61))
++                        if (k == 20 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.refreshResources();
+                         }
+ 
+-                        if (k == 33 && Keyboard.isKeyDown(61))
++                        if (k == 33 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.gameSettings.setOptionValue(GameSettings.Options.RENDER_DISTANCE, GuiScreen.isShiftKeyDown() ? -1 : 1);
+                         }
+ 
+-                        if (k == 30 && Keyboard.isKeyDown(61))
++                        if (k == 30 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.renderGlobal.loadRenderers();
+                         }
+ 
+-                        if (k == 35 && Keyboard.isKeyDown(61))
++                        if (k == 35 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.gameSettings.advancedItemTooltips = !this.gameSettings.advancedItemTooltips;
+                             this.gameSettings.saveOptions();
+                         }
+ 
+-                        if (k == 48 && Keyboard.isKeyDown(61))
++                        if (k == 48 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.renderManager.setDebugBoundingBox(!this.renderManager.isDebugBoundingBox());
+                         }
+ 
+-                        if (k == 25 && Keyboard.isKeyDown(61))
++                        if (k == 25 && KeyboardShim.isKeyDown(61))
+                         {
+                             this.gameSettings.pauseOnLostFocus = !this.gameSettings.pauseOnLostFocus;
+                             this.gameSettings.saveOptions();
+@@ -1939,6 +2217,18 @@
+ 
+             boolean flag = this.gameSettings.chatVisibility != EntityPlayer.EnumChatVisibility.HIDDEN;
+ 
++            while (this.gameSettings.keyBindClickGUI.isPressed())
++            {
++                if (this.currentScreen == null)
++                {
++                    this.displayGuiScreen(new net.minecraft.client.gui.clickgui.GuiClickGUI());
++                }
++                else if (this.currentScreen instanceof net.minecraft.client.gui.clickgui.GuiClickGUI)
++                {
++                    this.displayGuiScreen((net.minecraft.client.gui.GuiScreen) null);
++                }
++            }
++
+             while (this.gameSettings.keyBindInventory.isPressed())
+             {
+                 if (this.playerController.isRidingHorse())
+@@ -1954,7 +2244,7 @@
+ 
+             while (this.gameSettings.keyBindDrop.isPressed())
+             {
+-                if (!this.thePlayer.isSpectator())
++                if (!this.thePlayer.isSpectator() && plutonium.module.modules.DropFilter.allowDrop(this.thePlayer.getHeldItem()))
+                 {
+                     this.thePlayer.dropOneItem(GuiScreen.isCtrlKeyDown());
+                 }
+@@ -2115,6 +2405,8 @@
+             this.mcProfiler.endStartSection("pendingConnection");
+             this.myNetworkManager.processReceivedPackets();
+         }
++
++        plutonium.Plutonium.getInstance().onTick();
+ 
+         this.mcProfiler.endSection();
+         this.systemTime = getSystemTime();
+@@ -2505,14 +2797,14 @@
+         {
+             public String call()
+             {
+-                return Sys.getVersion();
++                return org.lwjgl.Version.getVersion();
+             }
+         });
+         theCrash.getCategory().addCrashSectionCallable("OpenGL", new Callable<String>()
+         {
+             public String call()
+             {
+-                return GL11.glGetString(GL11.GL_RENDERER) + " GL version " + GL11.glGetString(GL11.GL_VERSION) + ", " + GL11.glGetString(GL11.GL_VENDOR);
++                return plutonium.gpu.vk.VkContext.deviceName() + " Vulkan " + plutonium.gpu.vk.VkContext.apiVersion() + " (MoltenVK)";
+             }
+         });
+         theCrash.getCategory().addCrashSectionCallable("GL Caps", new Callable<String>()
+@@ -2618,7 +2910,7 @@
+     {
+         playerSnooper.addClientStat("fps", Integer.valueOf(debugFPS));
+         playerSnooper.addClientStat("vsync_enabled", Boolean.valueOf(this.gameSettings.enableVsync));
+-        playerSnooper.addClientStat("display_frequency", Integer.valueOf(Display.getDisplayMode().getFrequency()));
++        playerSnooper.addClientStat("display_frequency", Integer.valueOf(WindowManager.getDesktopRefreshRate()));
+         playerSnooper.addClientStat("display_type", this.fullscreen ? "fullscreen" : "windowed");
+         playerSnooper.addClientStat("run_time", Long.valueOf((MinecraftServer.getCurrentTimeMillis() - playerSnooper.getMinecraftStartTimeMillis()) / 60L * 1000L));
+         playerSnooper.addClientStat("current_action", this.func_181538_aA());
+@@ -2645,131 +2937,18 @@
+ 
+     public void addServerTypeToSnooper(PlayerUsageSnooper playerSnooper)
+     {
+-        playerSnooper.addStatToSnooper("opengl_version", GL11.glGetString(GL11.GL_VERSION));
+-        playerSnooper.addStatToSnooper("opengl_vendor", GL11.glGetString(GL11.GL_VENDOR));
++        playerSnooper.addStatToSnooper("opengl_version", "Vulkan " + plutonium.gpu.vk.VkContext.apiVersion());
++        playerSnooper.addStatToSnooper("opengl_vendor", "MoltenVK");
+         playerSnooper.addStatToSnooper("client_brand", ClientBrandRetriever.getClientModName());
+         playerSnooper.addStatToSnooper("launched_version", this.launchedVersion);
+-        ContextCapabilities contextcapabilities = GLContext.getCapabilities();
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_arrays_of_arrays]", Boolean.valueOf(contextcapabilities.GL_ARB_arrays_of_arrays));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_base_instance]", Boolean.valueOf(contextcapabilities.GL_ARB_base_instance));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_blend_func_extended]", Boolean.valueOf(contextcapabilities.GL_ARB_blend_func_extended));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_clear_buffer_object]", Boolean.valueOf(contextcapabilities.GL_ARB_clear_buffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_color_buffer_float]", Boolean.valueOf(contextcapabilities.GL_ARB_color_buffer_float));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_compatibility]", Boolean.valueOf(contextcapabilities.GL_ARB_compatibility));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_compressed_texture_pixel_storage]", Boolean.valueOf(contextcapabilities.GL_ARB_compressed_texture_pixel_storage));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_compute_shader]", Boolean.valueOf(contextcapabilities.GL_ARB_compute_shader));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_copy_buffer]", Boolean.valueOf(contextcapabilities.GL_ARB_copy_buffer));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_copy_image]", Boolean.valueOf(contextcapabilities.GL_ARB_copy_image));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_depth_buffer_float]", Boolean.valueOf(contextcapabilities.GL_ARB_depth_buffer_float));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_compute_shader]", Boolean.valueOf(contextcapabilities.GL_ARB_compute_shader));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_copy_buffer]", Boolean.valueOf(contextcapabilities.GL_ARB_copy_buffer));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_copy_image]", Boolean.valueOf(contextcapabilities.GL_ARB_copy_image));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_depth_buffer_float]", Boolean.valueOf(contextcapabilities.GL_ARB_depth_buffer_float));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_depth_clamp]", Boolean.valueOf(contextcapabilities.GL_ARB_depth_clamp));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_depth_texture]", Boolean.valueOf(contextcapabilities.GL_ARB_depth_texture));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_draw_buffers]", Boolean.valueOf(contextcapabilities.GL_ARB_draw_buffers));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_draw_buffers_blend]", Boolean.valueOf(contextcapabilities.GL_ARB_draw_buffers_blend));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_draw_elements_base_vertex]", Boolean.valueOf(contextcapabilities.GL_ARB_draw_elements_base_vertex));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_draw_indirect]", Boolean.valueOf(contextcapabilities.GL_ARB_draw_indirect));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_draw_instanced]", Boolean.valueOf(contextcapabilities.GL_ARB_draw_instanced));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_explicit_attrib_location]", Boolean.valueOf(contextcapabilities.GL_ARB_explicit_attrib_location));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_explicit_uniform_location]", Boolean.valueOf(contextcapabilities.GL_ARB_explicit_uniform_location));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_fragment_layer_viewport]", Boolean.valueOf(contextcapabilities.GL_ARB_fragment_layer_viewport));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_fragment_program]", Boolean.valueOf(contextcapabilities.GL_ARB_fragment_program));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_fragment_shader]", Boolean.valueOf(contextcapabilities.GL_ARB_fragment_shader));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_fragment_program_shadow]", Boolean.valueOf(contextcapabilities.GL_ARB_fragment_program_shadow));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_framebuffer_object]", Boolean.valueOf(contextcapabilities.GL_ARB_framebuffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_framebuffer_sRGB]", Boolean.valueOf(contextcapabilities.GL_ARB_framebuffer_sRGB));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_geometry_shader4]", Boolean.valueOf(contextcapabilities.GL_ARB_geometry_shader4));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_gpu_shader5]", Boolean.valueOf(contextcapabilities.GL_ARB_gpu_shader5));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_half_float_pixel]", Boolean.valueOf(contextcapabilities.GL_ARB_half_float_pixel));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_half_float_vertex]", Boolean.valueOf(contextcapabilities.GL_ARB_half_float_vertex));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_instanced_arrays]", Boolean.valueOf(contextcapabilities.GL_ARB_instanced_arrays));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_map_buffer_alignment]", Boolean.valueOf(contextcapabilities.GL_ARB_map_buffer_alignment));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_map_buffer_range]", Boolean.valueOf(contextcapabilities.GL_ARB_map_buffer_range));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_multisample]", Boolean.valueOf(contextcapabilities.GL_ARB_multisample));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_multitexture]", Boolean.valueOf(contextcapabilities.GL_ARB_multitexture));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_occlusion_query2]", Boolean.valueOf(contextcapabilities.GL_ARB_occlusion_query2));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_pixel_buffer_object]", Boolean.valueOf(contextcapabilities.GL_ARB_pixel_buffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_seamless_cube_map]", Boolean.valueOf(contextcapabilities.GL_ARB_seamless_cube_map));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_shader_objects]", Boolean.valueOf(contextcapabilities.GL_ARB_shader_objects));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_shader_stencil_export]", Boolean.valueOf(contextcapabilities.GL_ARB_shader_stencil_export));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_shader_texture_lod]", Boolean.valueOf(contextcapabilities.GL_ARB_shader_texture_lod));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_shadow]", Boolean.valueOf(contextcapabilities.GL_ARB_shadow));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_shadow_ambient]", Boolean.valueOf(contextcapabilities.GL_ARB_shadow_ambient));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_stencil_texturing]", Boolean.valueOf(contextcapabilities.GL_ARB_stencil_texturing));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_sync]", Boolean.valueOf(contextcapabilities.GL_ARB_sync));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_tessellation_shader]", Boolean.valueOf(contextcapabilities.GL_ARB_tessellation_shader));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_texture_border_clamp]", Boolean.valueOf(contextcapabilities.GL_ARB_texture_border_clamp));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_texture_buffer_object]", Boolean.valueOf(contextcapabilities.GL_ARB_texture_buffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_texture_cube_map]", Boolean.valueOf(contextcapabilities.GL_ARB_texture_cube_map));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_texture_cube_map_array]", Boolean.valueOf(contextcapabilities.GL_ARB_texture_cube_map_array));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_texture_non_power_of_two]", Boolean.valueOf(contextcapabilities.GL_ARB_texture_non_power_of_two));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_uniform_buffer_object]", Boolean.valueOf(contextcapabilities.GL_ARB_uniform_buffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_vertex_blend]", Boolean.valueOf(contextcapabilities.GL_ARB_vertex_blend));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_vertex_buffer_object]", Boolean.valueOf(contextcapabilities.GL_ARB_vertex_buffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_vertex_program]", Boolean.valueOf(contextcapabilities.GL_ARB_vertex_program));
+-        playerSnooper.addStatToSnooper("gl_caps[ARB_vertex_shader]", Boolean.valueOf(contextcapabilities.GL_ARB_vertex_shader));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_bindable_uniform]", Boolean.valueOf(contextcapabilities.GL_EXT_bindable_uniform));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_blend_equation_separate]", Boolean.valueOf(contextcapabilities.GL_EXT_blend_equation_separate));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_blend_func_separate]", Boolean.valueOf(contextcapabilities.GL_EXT_blend_func_separate));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_blend_minmax]", Boolean.valueOf(contextcapabilities.GL_EXT_blend_minmax));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_blend_subtract]", Boolean.valueOf(contextcapabilities.GL_EXT_blend_subtract));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_draw_instanced]", Boolean.valueOf(contextcapabilities.GL_EXT_draw_instanced));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_framebuffer_multisample]", Boolean.valueOf(contextcapabilities.GL_EXT_framebuffer_multisample));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_framebuffer_object]", Boolean.valueOf(contextcapabilities.GL_EXT_framebuffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_framebuffer_sRGB]", Boolean.valueOf(contextcapabilities.GL_EXT_framebuffer_sRGB));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_geometry_shader4]", Boolean.valueOf(contextcapabilities.GL_EXT_geometry_shader4));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_gpu_program_parameters]", Boolean.valueOf(contextcapabilities.GL_EXT_gpu_program_parameters));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_gpu_shader4]", Boolean.valueOf(contextcapabilities.GL_EXT_gpu_shader4));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_multi_draw_arrays]", Boolean.valueOf(contextcapabilities.GL_EXT_multi_draw_arrays));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_packed_depth_stencil]", Boolean.valueOf(contextcapabilities.GL_EXT_packed_depth_stencil));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_paletted_texture]", Boolean.valueOf(contextcapabilities.GL_EXT_paletted_texture));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_rescale_normal]", Boolean.valueOf(contextcapabilities.GL_EXT_rescale_normal));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_separate_shader_objects]", Boolean.valueOf(contextcapabilities.GL_EXT_separate_shader_objects));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_shader_image_load_store]", Boolean.valueOf(contextcapabilities.GL_EXT_shader_image_load_store));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_shadow_funcs]", Boolean.valueOf(contextcapabilities.GL_EXT_shadow_funcs));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_shared_texture_palette]", Boolean.valueOf(contextcapabilities.GL_EXT_shared_texture_palette));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_stencil_clear_tag]", Boolean.valueOf(contextcapabilities.GL_EXT_stencil_clear_tag));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_stencil_two_side]", Boolean.valueOf(contextcapabilities.GL_EXT_stencil_two_side));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_stencil_wrap]", Boolean.valueOf(contextcapabilities.GL_EXT_stencil_wrap));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_texture_3d]", Boolean.valueOf(contextcapabilities.GL_EXT_texture_3d));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_texture_array]", Boolean.valueOf(contextcapabilities.GL_EXT_texture_array));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_texture_buffer_object]", Boolean.valueOf(contextcapabilities.GL_EXT_texture_buffer_object));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_texture_integer]", Boolean.valueOf(contextcapabilities.GL_EXT_texture_integer));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_texture_lod_bias]", Boolean.valueOf(contextcapabilities.GL_EXT_texture_lod_bias));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_texture_sRGB]", Boolean.valueOf(contextcapabilities.GL_EXT_texture_sRGB));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_vertex_shader]", Boolean.valueOf(contextcapabilities.GL_EXT_vertex_shader));
+-        playerSnooper.addStatToSnooper("gl_caps[EXT_vertex_weighting]", Boolean.valueOf(contextcapabilities.GL_EXT_vertex_weighting));
+-        playerSnooper.addStatToSnooper("gl_caps[gl_max_vertex_uniforms]", Integer.valueOf(GL11.glGetInteger(GL20.GL_MAX_VERTEX_UNIFORM_COMPONENTS)));
+-        GL11.glGetError();
+-        playerSnooper.addStatToSnooper("gl_caps[gl_max_fragment_uniforms]", Integer.valueOf(GL11.glGetInteger(GL20.GL_MAX_FRAGMENT_UNIFORM_COMPONENTS)));
+-        GL11.glGetError();
+-        playerSnooper.addStatToSnooper("gl_caps[gl_max_vertex_attribs]", Integer.valueOf(GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)));
+-        GL11.glGetError();
+-        playerSnooper.addStatToSnooper("gl_caps[gl_max_vertex_texture_image_units]", Integer.valueOf(GL11.glGetInteger(GL20.GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS)));
+-        GL11.glGetError();
+-        playerSnooper.addStatToSnooper("gl_caps[gl_max_texture_image_units]", Integer.valueOf(GL11.glGetInteger(GL20.GL_MAX_TEXTURE_IMAGE_UNITS)));
+-        GL11.glGetError();
+-        playerSnooper.addStatToSnooper("gl_caps[gl_max_texture_image_units]", Integer.valueOf(GL11.glGetInteger(35071)));
+-        GL11.glGetError();
++        // GL capability snooper stats removed (Vulkan renderer).
+         playerSnooper.addStatToSnooper("gl_max_texture_size", Integer.valueOf(getGLMaximumTextureSize()));
+     }
+ 
+     public static int getGLMaximumTextureSize()
+     {
+-        for (int i = 16384; i > 0; i >>= 1)
+-        {
+-            GL11.glTexImage2D(GL11.GL_PROXY_TEXTURE_2D, 0, GL11.GL_RGBA, i, i, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (ByteBuffer)((ByteBuffer)null));
+-            int j = GL11.glGetTexLevelParameteri(GL11.GL_PROXY_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH);
+-
+-            if (j != 0)
+-            {
+-                return i;
+-            }
+-        }
+-
+-        return -1;
++        // Apple GPUs (Metal 3) support 16384; MoltenVK reports it via maxImageDimension2D.
++        return 16384;
+     }
+ 
+     public boolean isSnooperEnabled()
+@@ -2822,7 +3001,7 @@
+ 
+     public static long getSystemTime()
+     {
+-        return Sys.getTime() * 1000L / Sys.getTimerResolution();
++        return System.nanoTime() / 1000000L;
+     }
+ 
+     public boolean isFullScreen()
+@@ -2833,6 +3012,12 @@
+     public Session getSession()
+     {
+         return this.session;
++    }
++
++    /** Account switching (plutonium.AccountManager); Session itself is immutable. */
++    public void setSession(Session sessionIn)
++    {
++        this.session = sessionIn;
+     }
+ 
+     public PropertyMap getTwitchDetails()
+@@ -2908,13 +3093,13 @@
+ 
+     public void dispatchKeypresses()
+     {
+-        int i = Keyboard.getEventKey() == 0 ? Keyboard.getEventCharacter() : Keyboard.getEventKey();
+-
+-        if (i != 0 && !Keyboard.isRepeatEvent())
++        int i = KeyboardShim.getEventKey() == 0 ? KeyboardShim.getEventCharacter() : KeyboardShim.getEventKey();
++
++        if (i != 0 && !KeyboardShim.isRepeatEvent())
+         {
+             if (!(this.currentScreen instanceof GuiControls) || ((GuiControls)this.currentScreen).time <= getSystemTime() - 20L)
+             {
+-                if (Keyboard.getEventKeyState())
++                if (KeyboardShim.getEventKeyState())
+                 {
+                     if (i == this.gameSettings.keyBindStreamStartStop.getKeyCode())
+                     {
+@@ -2980,7 +3165,11 @@
+                     }
+                     else if (i == this.gameSettings.keyBindScreenshot.getKeyCode())
+                     {
+-                        this.ingameGUI.getChatGUI().printChatMessage(ScreenShotHelper.saveScreenshot(this.mcDataDir, this.displayWidth, this.displayHeight, this.framebufferMc));
++                        ScreenShotHelper.saveScreenshot(this.mcDataDir, this.displayWidth, this.displayHeight, this.framebufferMc);
++                        if (net.minecraft.util.ScreenShotHelper.lastSavedFile != null)
++                        {
++                            plutonium.ScreenshotToast.INSTANCE.show(net.minecraft.util.ScreenShotHelper.lastSavedFile);
++                        }
+                     }
+                 }
+                 else if (i == this.gameSettings.keyBindStreamToggleMic.getKeyCode())

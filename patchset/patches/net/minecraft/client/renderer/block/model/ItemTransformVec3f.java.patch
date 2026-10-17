@@ -1,0 +1,11 @@
+--- a/net/minecraft/client/renderer/block/model/ItemTransformVec3f.java
++++ b/net/minecraft/client/renderer/block/model/ItemTransformVec3f.java
+@@ -9,7 +9,7 @@
+ import java.lang.reflect.Type;
+ import net.minecraft.util.JsonUtils;
+ import net.minecraft.util.MathHelper;
+-import org.lwjgl.util.vector.Vector3f;
++import plutonium.gpu.math.Vector3f;
+ 
+ public class ItemTransformVec3f
+ {

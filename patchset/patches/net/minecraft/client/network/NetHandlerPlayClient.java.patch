@@ -1,0 +1,52 @@
+--- a/net/minecraft/client/network/NetHandlerPlayClient.java
++++ b/net/minecraft/client/network/NetHandlerPlayClient.java
+@@ -657,6 +657,7 @@
+     public void handleChunkData(S21PacketChunkData packetIn)
+     {
+         PacketThreadUtil.checkThreadAndEnqueue(packetIn, this, this.gameController);
++        long chunkApplyStart = plutonium.NetStats.ENABLED ? System.nanoTime() : 0L;
+ 
+         if (packetIn.func_149274_i())
+         {
+@@ -677,6 +678,11 @@
+         if (!packetIn.func_149274_i() || !(this.clientWorldController.provider instanceof WorldProviderSurface))
+         {
+             chunk.resetRelightChecks();
++        }
++
++        if (plutonium.NetStats.ENABLED)
++        {
++            plutonium.NetStats.recordChunkApply(System.nanoTime() - chunkApplyStart, 1);
+         }
+     }
+ 
+@@ -1176,6 +1182,7 @@
+     public void handleMapChunkBulk(S26PacketMapChunkBulk packetIn)
+     {
+         PacketThreadUtil.checkThreadAndEnqueue(packetIn, this, this.gameController);
++        long chunkApplyStart = plutonium.NetStats.ENABLED ? System.nanoTime() : 0L;
+ 
+         for (int i = 0; i < packetIn.getChunkCount(); ++i)
+         {
+@@ -1191,6 +1198,11 @@
+             {
+                 chunk.resetRelightChecks();
+             }
++        }
++
++        if (plutonium.NetStats.ENABLED)
++        {
++            plutonium.NetStats.recordChunkApply(System.nanoTime() - chunkApplyStart, packetIn.getChunkCount());
+         }
+     }
+ 
+@@ -1507,6 +1519,9 @@
+         entityplayer.capabilities.allowFlying = packetIn.isAllowFlying();
+         entityplayer.capabilities.setFlySpeed(packetIn.getFlySpeed());
+         entityplayer.capabilities.setPlayerWalkSpeed(packetIn.getWalkSpeed());
++
++        // Plutonium Flight overwrites allowFlying locally; record what the server actually
++        // said so the floating-kick readout is based on the server's view, not our own.
+     }
+ 
+     public void handleTabComplete(S3APacketTabComplete packetIn)

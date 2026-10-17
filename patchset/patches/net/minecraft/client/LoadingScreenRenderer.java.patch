@@ -1,0 +1,62 @@
+--- a/net/minecraft/client/LoadingScreenRenderer.java
++++ b/net/minecraft/client/LoadingScreenRenderer.java
+@@ -138,14 +138,7 @@
+ 
+                 Tessellator tessellator = Tessellator.getInstance();
+                 WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+-                this.mc.getTextureManager().bindTexture(Gui.optionsBackground);
+-                float f = 32.0F;
+-                worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX_COLOR);
+-                worldrenderer.pos(0.0D, (double)l, 0.0D).tex(0.0D, (double)((float)l / f)).color(64, 64, 64, 255).endVertex();
+-                worldrenderer.pos((double)k, (double)l, 0.0D).tex((double)((float)k / f), (double)((float)l / f)).color(64, 64, 64, 255).endVertex();
+-                worldrenderer.pos((double)k, 0.0D, 0.0D).tex((double)((float)k / f), 0.0D).color(64, 64, 64, 255).endVertex();
+-                worldrenderer.pos(0.0D, 0.0D, 0.0D).tex(0.0D, 0.0D).color(64, 64, 64, 255).endVertex();
+-                tessellator.draw();
++                Gui.drawRect(0, 0, k, l, 0xFF090B16);
+ 
+                 if (progress >= 0)
+                 {
+@@ -153,24 +146,29 @@
+                     int j1 = 2;
+                     int k1 = k / 2 - i1 / 2;
+                     int l1 = l / 2 + 16;
+-                    GlStateManager.disableTexture2D();
+-                    worldrenderer.begin(7, DefaultVertexFormats.POSITION_COLOR);
+-                    worldrenderer.pos((double)k1, (double)l1, 0.0D).color(128, 128, 128, 255).endVertex();
+-                    worldrenderer.pos((double)k1, (double)(l1 + j1), 0.0D).color(128, 128, 128, 255).endVertex();
+-                    worldrenderer.pos((double)(k1 + i1), (double)(l1 + j1), 0.0D).color(128, 128, 128, 255).endVertex();
+-                    worldrenderer.pos((double)(k1 + i1), (double)l1, 0.0D).color(128, 128, 128, 255).endVertex();
+-                    worldrenderer.pos((double)k1, (double)l1, 0.0D).color(128, 255, 128, 255).endVertex();
+-                    worldrenderer.pos((double)k1, (double)(l1 + j1), 0.0D).color(128, 255, 128, 255).endVertex();
+-                    worldrenderer.pos((double)(k1 + progress), (double)(l1 + j1), 0.0D).color(128, 255, 128, 255).endVertex();
+-                    worldrenderer.pos((double)(k1 + progress), (double)l1, 0.0D).color(128, 255, 128, 255).endVertex();
+-                    tessellator.draw();
+-                    GlStateManager.enableTexture2D();
++                    Gui.drawRect(k1, l1, k1 + i1, l1 + j1, 0x33FFFFFF);
++
++                    if (progress > 0)
++                    {
++                        GlStateManager.disableTexture2D();
++                        GlStateManager.enableBlend();
++                        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
++                        GlStateManager.shadeModel(7425);
++                        worldrenderer.begin(7, DefaultVertexFormats.POSITION_COLOR);
++                        worldrenderer.pos((double)k1, (double)l1, 0.0D).color(0.365f, 0.314f, 0.94f, 1.0f).endVertex();
++                        worldrenderer.pos((double)k1, (double)(l1 + j1), 0.0D).color(0.365f, 0.314f, 0.94f, 1.0f).endVertex();
++                        worldrenderer.pos((double)(k1 + progress), (double)(l1 + j1), 0.0D).color(0.235f, 0.192f, 0.75f, 1.0f).endVertex();
++                        worldrenderer.pos((double)(k1 + progress), (double)l1, 0.0D).color(0.235f, 0.192f, 0.75f, 1.0f).endVertex();
++                        tessellator.draw();
++                        GlStateManager.shadeModel(7424);
++                        GlStateManager.enableTexture2D();
++                    }
+                 }
+ 
+                 GlStateManager.enableBlend();
+                 GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
+-                this.mc.fontRendererObj.drawStringWithShadow(this.currentlyDisplayedText, (float)((k - this.mc.fontRendererObj.getStringWidth(this.currentlyDisplayedText)) / 2), (float)(l / 2 - 4 - 16), 16777215);
+-                this.mc.fontRendererObj.drawStringWithShadow(this.message, (float)((k - this.mc.fontRendererObj.getStringWidth(this.message)) / 2), (float)(l / 2 - 4 + 8), 16777215);
++                this.mc.fontRendererObj.drawStringWithShadow(this.currentlyDisplayedText, (float)((k - this.mc.fontRendererObj.getStringWidth(this.currentlyDisplayedText)) / 2), (float)(l / 2 - 4 - 16), 0xFFEEECFF);
++                this.mc.fontRendererObj.drawStringWithShadow(this.message, (float)((k - this.mc.fontRendererObj.getStringWidth(this.message)) / 2), (float)(l / 2 - 4 + 8), 0xFF8E8BB8);
+                 this.framebuffer.unbindFramebuffer();
+ 
+                 if (OpenGlHelper.isFramebufferEnabled())

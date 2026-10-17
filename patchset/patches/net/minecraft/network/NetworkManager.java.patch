@@ -1,0 +1,214 @@
+--- a/net/minecraft/network/NetworkManager.java
++++ b/net/minecraft/network/NetworkManager.java
+@@ -30,7 +30,7 @@
+ import java.net.InetAddress;
+ import java.net.SocketAddress;
+ import java.util.Queue;
+-import java.util.concurrent.locks.ReentrantReadWriteLock;
++import java.util.concurrent.TimeUnit;
+ import javax.crypto.SecretKey;
+ import net.minecraft.util.ChatComponentText;
+ import net.minecraft.util.ChatComponentTranslation;
+@@ -62,7 +62,7 @@
+             return new NioEventLoopGroup(0, (new ThreadFactoryBuilder()).setNameFormat("Netty Client IO #%d").setDaemon(true).build());
+         }
+     };
+-    public static final LazyLoadBase<EpollEventLoopGroup> field_181125_e = new LazyLoadBase<EpollEventLoopGroup>()
++    public static final LazyLoadBase<EpollEventLoopGroup> CLIENT_EPOLL_EVENTLOOP = new LazyLoadBase<EpollEventLoopGroup>()
+     {
+         protected EpollEventLoopGroup load()
+         {
+@@ -78,7 +78,6 @@
+     };
+     private final EnumPacketDirection direction;
+     private final Queue<NetworkManager.InboundHandlerTuplePacketListener> outboundPacketsQueue = Queues.<NetworkManager.InboundHandlerTuplePacketListener>newConcurrentLinkedQueue();
+-    private final ReentrantReadWriteLock field_181680_j = new ReentrantReadWriteLock();
+     private Channel channel;
+     private SocketAddress socketAddress;
+     private INetHandler packetListener;
+@@ -86,6 +85,14 @@
+     private boolean isEncrypted;
+     private boolean disconnected;
+ 
++    // Connection-health stats for plutonium NetMonitor. lastInboundTimeMs/maxInboundGapMs are
++    // written only by the Netty channel thread; NetMonitor reads them (and clears the peak)
++    // from the main thread — a lost peak across that race is acceptable for diagnostics.
++    public volatile long lastInboundTimeMs;
++    public volatile long maxInboundGapMs;
++    public final java.util.concurrent.atomic.AtomicLong inboundPacketCount = new java.util.concurrent.atomic.AtomicLong();
++    public final java.util.concurrent.atomic.AtomicLong outboundPacketCount = new java.util.concurrent.atomic.AtomicLong();
++
+     public NetworkManager(EnumPacketDirection packetDirection)
+     {
+         this.direction = packetDirection;
+@@ -139,14 +146,49 @@
+     {
+         if (this.channel.isOpen())
+         {
+-            try
+-            {
+-                p_channelRead0_2_.processPacket(this.packetListener);
+-            }
+-            catch (ThreadQuickExitException var4)
+-            {
+-                ;
+-            }
++
++            this.deliverInbound(p_channelRead0_2_);
++        }
++    }
++
++    /**
++     * Apply one inbound packet: connection-health bookkeeping, then hand it to the listener.
++     * Runs on the Netty IO thread — straight from channelRead0, or later from Packet Control
++     * when a simulated stall releases its backlog. The arrival time is stamped here rather
++     * than at channelRead0 so an injected stall reads as a real gap to NetMonitor.
++     */
++    public void deliverInbound(Packet packet)
++    {
++        if (!this.channel.isOpen())
++        {
++            return;
++        }
++
++        long now = System.currentTimeMillis();
++        long prev = this.lastInboundTimeMs;
++        if (prev != 0L && now - prev > this.maxInboundGapMs)
++        {
++            this.maxInboundGapMs = now - prev;
++        }
++        this.lastInboundTimeMs = now;
++        this.inboundPacketCount.incrementAndGet();
++
++        try
++        {
++            packet.processPacket(this.packetListener);
++        }
++        catch (ThreadQuickExitException var4)
++        {
++            ;
++        }
++    }
++
++    /** Run {@code task} on this connection's Netty IO thread after {@code delayMs}. */
++    public void scheduleOnIoThread(Runnable task, long delayMs)
++    {
++        if (this.channel != null)
++        {
++            this.channel.eventLoop().schedule(task, delayMs, TimeUnit.MILLISECONDS);
+         }
+     }
+ 
+@@ -159,6 +201,7 @@
+ 
+     public void sendPacket(Packet packetIn)
+     {
++
+         if (this.isChannelOpen())
+         {
+             this.flushOutboundQueue();
+@@ -166,16 +209,7 @@
+         }
+         else
+         {
+-            this.field_181680_j.writeLock().lock();
+-
+-            try
+-            {
+-                this.outboundPacketsQueue.add(new NetworkManager.InboundHandlerTuplePacketListener(packetIn, (GenericFutureListener[])null));
+-            }
+-            finally
+-            {
+-                this.field_181680_j.writeLock().unlock();
+-            }
++            this.outboundPacketsQueue.add(new NetworkManager.InboundHandlerTuplePacketListener(packetIn, (GenericFutureListener[])null));
+         }
+     }
+ 
+@@ -188,21 +222,13 @@
+         }
+         else
+         {
+-            this.field_181680_j.writeLock().lock();
+-
+-            try
+-            {
+-                this.outboundPacketsQueue.add(new NetworkManager.InboundHandlerTuplePacketListener(packetIn, (GenericFutureListener[])ArrayUtils.add(listeners, 0, listener)));
+-            }
+-            finally
+-            {
+-                this.field_181680_j.writeLock().unlock();
+-            }
++            this.outboundPacketsQueue.add(new NetworkManager.InboundHandlerTuplePacketListener(packetIn, (GenericFutureListener[])ArrayUtils.add(listeners, 0, listener)));
+         }
+     }
+ 
+     private void dispatchPacket(final Packet inPacket, final GenericFutureListener <? extends Future <? super Void >> [] futureListeners)
+     {
++        this.outboundPacketCount.incrementAndGet();
+         final EnumConnectionState enumconnectionstate = EnumConnectionState.getFromPacket(inPacket);
+         final EnumConnectionState enumconnectionstate1 = (EnumConnectionState)this.channel.attr(attrKeyConnectionState).get();
+ 
+@@ -256,19 +282,11 @@
+     {
+         if (this.channel != null && this.channel.isOpen())
+         {
+-            this.field_181680_j.readLock().lock();
+-
+-            try
+-            {
+-                while (!this.outboundPacketsQueue.isEmpty())
+-                {
+-                    NetworkManager.InboundHandlerTuplePacketListener networkmanager$inboundhandlertuplepacketlistener = (NetworkManager.InboundHandlerTuplePacketListener)this.outboundPacketsQueue.poll();
+-                    this.dispatchPacket(networkmanager$inboundhandlertuplepacketlistener.packet, networkmanager$inboundhandlertuplepacketlistener.futureListeners);
+-                }
+-            }
+-            finally
+-            {
+-                this.field_181680_j.readLock().unlock();
++            NetworkManager.InboundHandlerTuplePacketListener entry;
++
++            while ((entry = this.outboundPacketsQueue.poll()) != null)
++            {
++                this.dispatchPacket(entry.packet, entry.futureListeners);
+             }
+         }
+     }
+@@ -304,16 +322,16 @@
+         return this.channel instanceof LocalChannel || this.channel instanceof LocalServerChannel;
+     }
+ 
+-    public static NetworkManager func_181124_a(InetAddress p_181124_0_, int p_181124_1_, boolean p_181124_2_)
++    public static NetworkManager func_181124_a(InetAddress address, int serverPort, boolean useNativeTransport)
+     {
+         final NetworkManager networkmanager = new NetworkManager(EnumPacketDirection.CLIENTBOUND);
+         Class <? extends SocketChannel > oclass;
+         LazyLoadBase <? extends EventLoopGroup > lazyloadbase;
+ 
+-        if (Epoll.isAvailable() && p_181124_2_)
++        if (Epoll.isAvailable() && useNativeTransport)
+         {
+             oclass = EpollSocketChannel.class;
+-            lazyloadbase = field_181125_e;
++            lazyloadbase = CLIENT_EPOLL_EVENTLOOP;
+         }
+         else
+         {
+@@ -336,7 +354,7 @@
+ 
+                 p_initChannel_1_.pipeline().addLast((String)"timeout", (ChannelHandler)(new ReadTimeoutHandler(30))).addLast((String)"splitter", (ChannelHandler)(new MessageDeserializer2())).addLast((String)"decoder", (ChannelHandler)(new MessageDeserializer(EnumPacketDirection.CLIENTBOUND))).addLast((String)"prepender", (ChannelHandler)(new MessageSerializer2())).addLast((String)"encoder", (ChannelHandler)(new MessageSerializer(EnumPacketDirection.SERVERBOUND))).addLast((String)"packet_handler", (ChannelHandler)networkmanager);
+             }
+-        })).channel(oclass)).connect(p_181124_0_, p_181124_1_).syncUninterruptibly();
++        })).channel(oclass)).connect(address, serverPort).syncUninterruptibly();
+         return networkmanager;
+     }
+ 
+@@ -405,7 +423,7 @@
+ 
+             if (this.channel.pipeline().get("compress") instanceof NettyCompressionEncoder)
+             {
+-                ((NettyCompressionEncoder)this.channel.pipeline().get("decompress")).setCompressionTreshold(treshold);
++                ((NettyCompressionEncoder)this.channel.pipeline().get("compress")).setCompressionTreshold(treshold);
+             }
+             else
+             {

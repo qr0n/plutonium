@@ -1,0 +1,26 @@
+--- a/net/minecraft/client/renderer/texture/TextureMap.java
++++ b/net/minecraft/client/renderer/texture/TextureMap.java
+@@ -253,6 +253,23 @@
+         {
+             textureatlassprite3.copyFrom(this.missingImage);
+         }
++
++        // Static sprites are already on the GPU; drop their CPU-side frame data.
++        int freedSprites = 0;
++
++        for (TextureAtlasSprite sprite : this.mapUploadedSprites.values())
++        {
++            if (!sprite.hasAnimationMetadata() && sprite.getFrameCount() > 0)
++            {
++                sprite.clearFramesTextureData();
++                ++freedSprites;
++            }
++        }
++
++        if (freedSprites > 0)
++        {
++            logger.debug("Freed frame data for {} non-animated sprites", new Object[] {Integer.valueOf(freedSprites)});
++        }
+     }
+ 
+     private ResourceLocation completeResourceLocation(ResourceLocation location, int p_147634_2_)

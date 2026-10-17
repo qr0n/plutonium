@@ -1,0 +1,1352 @@
+--- a/net/minecraft/client/renderer/GlStateManager.java
++++ b/net/minecraft/client/renderer/GlStateManager.java
+@@ -1,7 +1,15 @@
+ package net.minecraft.client.renderer;
+ 
++import java.nio.ByteBuffer;
+ import java.nio.FloatBuffer;
+-import org.lwjgl.opengl.GL11;
++import java.nio.IntBuffer;
++import plutonium.gpu.CoreShaders;
++import plutonium.gpu.vk.VkDrawDispatch;
++import plutonium.gpu.vk.VkRenderState;
++import plutonium.gpu.vk.VkRenderTargets;
++import plutonium.gpu.vk.VkTextures;
++import plutonium.gpu.MatrixStack;
++import plutonium.gpu.ShaderProgram;
+ 
+ public class GlStateManager
+ {
+@@ -20,30 +28,50 @@
+     private static GlStateManager.StencilState stencilState = new GlStateManager.StencilState();
+     private static GlStateManager.BooleanState normalizeState = new GlStateManager.BooleanState(2977);
+     private static int activeTextureUnit = 0;
+-    private static GlStateManager.TextureState[] textureState = new GlStateManager.TextureState[8];
++    private static GlStateManager.TextureState[] textureState = new GlStateManager.TextureState[32];
+     private static int activeShadeModel = 7425;
+     private static GlStateManager.BooleanState rescaleNormalState = new GlStateManager.BooleanState(32826);
+     private static GlStateManager.ColorMask colorMaskState = new GlStateManager.ColorMask();
+     private static GlStateManager.Color colorState = new GlStateManager.Color();
++    public static boolean clearEnabled = true;
++    private static boolean creatingDisplayList = false;
++
++    // Entity overlay colour (hurt-flash / colour-multiplier). rgb = tint, a = mix factor.
++    // Replaces the fixed-function glTexEnv combiner the core profile can't use. Applied to
++    // the entity shader via syncUniforms; (0,0,0,0) = no tint.
++    private static float overlayR, overlayG, overlayB, overlayA;
++
++    // Light state for shader uniforms
++    private static final float[][] lightPositions = new float[2][4];
++    private static final float[][] lightDiffuse = new float[2][3];
++    private static final float[] lightAmbient = {0.2f, 0.2f, 0.2f};
++    private static boolean lightingEnabled = false;
++    private static final boolean[] lightsEnabled = new boolean[2];
++
++    // Fog color (cached from glFogfv calls)
++    private static final float[] fogColor = {0, 0, 0, 1};
++
++    // Texture2D tracking (no GL call, just flag for shader selection)
++    private static boolean texture2DEnabled = true;
+ 
+     public static void pushAttrib()
+     {
+-        GL11.glPushAttrib(8256);
++        // No-op in core profile (removed)
+     }
+ 
+     public static void popAttrib()
+     {
+-        GL11.glPopAttrib();
++        // No-op in core profile (removed)
+     }
+ 
+     public static void disableAlpha()
+     {
+-        alphaState.field_179208_a.setDisabled();
++        alphaState.alphaTest.setDisabled();
+     }
+ 
+     public static void enableAlpha()
+     {
+-        alphaState.field_179208_a.setEnabled();
++        alphaState.alphaTest.setEnabled();
+     }
+ 
+     public static void alphaFunc(int func, float ref)
+@@ -52,47 +80,51 @@
+         {
+             alphaState.func = func;
+             alphaState.ref = ref;
+-            GL11.glAlphaFunc(func, ref);
+         }
+     }
+ 
+     public static void enableLighting()
+     {
++        if (!lightingEnabled) plutonium.gpu.Batches.flushAll();
+         lightingState.setEnabled();
++        lightingEnabled = true;
+     }
+ 
+     public static void disableLighting()
+     {
++        if (lightingEnabled) plutonium.gpu.Batches.flushAll();
+         lightingState.setDisabled();
++        lightingEnabled = false;
+     }
+ 
+     public static void enableLight(int light)
+     {
+         lightState[light].setEnabled();
++        if (light < 2) lightsEnabled[light] = true;
+     }
+ 
+     public static void disableLight(int light)
+     {
+         lightState[light].setDisabled();
++        if (light < 2) lightsEnabled[light] = false;
+     }
+ 
+     public static void enableColorMaterial()
+     {
+-        colorMaterialState.field_179191_a.setEnabled();
++        colorMaterialState.colorMaterial.setEnabled();
+     }
+ 
+     public static void disableColorMaterial()
+     {
+-        colorMaterialState.field_179191_a.setDisabled();
++        colorMaterialState.colorMaterial.setDisabled();
+     }
+ 
+     public static void colorMaterial(int face, int mode)
+     {
+-        if (face != colorMaterialState.field_179189_b || mode != colorMaterialState.field_179190_c)
+-        {
+-            colorMaterialState.field_179189_b = face;
+-            colorMaterialState.field_179190_c = mode;
+-            GL11.glColorMaterial(face, mode);
++        if (face != colorMaterialState.face || mode != colorMaterialState.mode)
++        {
++            colorMaterialState.face = face;
++            colorMaterialState.mode = mode;
+         }
+     }
+ 
+@@ -111,7 +143,7 @@
+         if (depthFunc != depthState.depthFunc)
+         {
+             depthState.depthFunc = depthFunc;
+-            GL11.glDepthFunc(depthFunc);
++            VkRenderState.depthFunc = depthFunc;
+         }
+     }
+ 
+@@ -120,27 +152,56 @@
+         if (flagIn != depthState.maskEnabled)
+         {
+             depthState.maskEnabled = flagIn;
+-            GL11.glDepthMask(flagIn);
+-        }
++            VkRenderState.depthWrite = flagIn;
++        }
++    }
++
++    /**
++     * Drive the full depth state (test enable, compare func, write mask) straight to GL and
++     * re-sync the cached values, regardless of what the cache currently believes. The normal
++     * {@link #enableDepth()} / {@link #depthFunc(int)} / {@link #depthMask(boolean)} setters
++     * short-circuit when the cache already matches the requested value, so they are silent
++     * no-ops whenever the cache has drifted from real GL (e.g. a framebuffer rebind or OptiFine
++     * path toggled depth directly). A deferred batch flushing at the world→GUI boundary cannot
++     * trust the ambient cache, so it must set its depth state authoritatively here.
++     */
++    public static void forceDepthState(boolean testEnabled, int func, boolean writeMask)
++    {
++        depthState.depthTest.currentState = testEnabled;
++        VkRenderState.depthTest = testEnabled;
++
++        depthState.depthFunc = func;
++        VkRenderState.depthFunc = func;
++
++        depthState.maskEnabled = writeMask;
++        VkRenderState.depthWrite = writeMask;
+     }
+ 
+     public static void disableBlend()
+     {
+-        blendState.field_179213_a.setDisabled();
++        plutonium.gpu.Batches.flushAll();
++        blendState.blend.setDisabled();
+     }
+ 
+     public static void enableBlend()
+     {
+-        blendState.field_179213_a.setEnabled();
++        plutonium.gpu.Batches.flushAll();
++        blendState.blend.setEnabled();
+     }
+ 
+     public static void blendFunc(int srcFactor, int dstFactor)
+     {
+-        if (srcFactor != blendState.srcFactor || dstFactor != blendState.dstFactor)
++        if (srcFactor != blendState.srcFactor || dstFactor != blendState.dstFactor || srcFactor != blendState.srcFactorAlpha || dstFactor != blendState.dstFactorAlpha)
+         {
+             blendState.srcFactor = srcFactor;
+             blendState.dstFactor = dstFactor;
+-            GL11.glBlendFunc(srcFactor, dstFactor);
++            blendState.srcFactorAlpha = srcFactor;
++            blendState.dstFactorAlpha = dstFactor;
++
++            VkRenderState.blendSrcRGB = srcFactor;
++            VkRenderState.blendDstRGB = dstFactor;
++            VkRenderState.blendSrcA = srcFactor;
++            VkRenderState.blendDstA = dstFactor;
+         }
+     }
+ 
+@@ -152,138 +213,161 @@
+             blendState.dstFactor = dstFactor;
+             blendState.srcFactorAlpha = srcFactorAlpha;
+             blendState.dstFactorAlpha = dstFactorAlpha;
+-            OpenGlHelper.glBlendFunc(srcFactor, dstFactor, srcFactorAlpha, dstFactorAlpha);
++
++            VkRenderState.blendSrcRGB = srcFactor;
++            VkRenderState.blendDstRGB = dstFactor;
++            VkRenderState.blendSrcA = srcFactorAlpha;
++            VkRenderState.blendDstA = dstFactorAlpha;
+         }
+     }
+ 
+     public static void enableFog()
+     {
+-        fogState.field_179049_a.setEnabled();
++        fogState.fog.setEnabled();
+     }
+ 
+     public static void disableFog()
+     {
+-        fogState.field_179049_a.setDisabled();
++        fogState.fog.setDisabled();
+     }
+ 
+     public static void setFog(int param)
+     {
+-        if (param != fogState.field_179047_b)
+-        {
+-            fogState.field_179047_b = param;
+-            GL11.glFogi(GL11.GL_FOG_MODE, param);
++        if (param != fogState.mode)
++        {
++            fogState.mode = param;
+         }
+     }
+ 
+     public static void setFogDensity(float param)
+     {
+-        if (param != fogState.field_179048_c)
+-        {
+-            fogState.field_179048_c = param;
+-            GL11.glFogf(GL11.GL_FOG_DENSITY, param);
++        if (param < 0.0F)
++        {
++            param = 0.0F;
++        }
++
++        if (param != fogState.density)
++        {
++            fogState.density = param;
+         }
+     }
+ 
+     public static void setFogStart(float param)
+     {
+-        if (param != fogState.field_179045_d)
+-        {
+-            fogState.field_179045_d = param;
+-            GL11.glFogf(GL11.GL_FOG_START, param);
++        if (param != fogState.start)
++        {
++            fogState.start = param;
+         }
+     }
+ 
+     public static void setFogEnd(float param)
+     {
+-        if (param != fogState.field_179046_e)
+-        {
+-            fogState.field_179046_e = param;
+-            GL11.glFogf(GL11.GL_FOG_END, param);
++        if (param != fogState.end)
++        {
++            fogState.end = param;
++        }
++    }
++
++    public static void glFog(int p_glFog_0_, FloatBuffer p_glFog_1_)
++    {
++        // Cache fog color when pname is GL_FOG_COLOR (2918)
++        if (p_glFog_0_ == 2918 && p_glFog_1_.remaining() >= 4)
++        {
++            int pos = p_glFog_1_.position();
++            fogColor[0] = p_glFog_1_.get();
++            fogColor[1] = p_glFog_1_.get();
++            fogColor[2] = p_glFog_1_.get();
++            fogColor[3] = p_glFog_1_.get();
++            p_glFog_1_.position(pos);
++        }
++    }
++
++    public static void glFogi(int p_glFogi_0_, int p_glFogi_1_)
++    {
++        // Cache fog mode
++        if (p_glFogi_0_ == 2917)   // GL_FOG_MODE
++        {
++            fogState.mode = p_glFogi_1_;
+         }
+     }
+ 
+     public static void enableCull()
+     {
+-        cullState.field_179054_a.setEnabled();
++        cullState.cullFace.setEnabled();
+     }
+ 
+     public static void disableCull()
+     {
+-        cullState.field_179054_a.setDisabled();
++        cullState.cullFace.setDisabled();
+     }
+ 
+     public static void cullFace(int mode)
+     {
+-        if (mode != cullState.field_179053_b)
+-        {
+-            cullState.field_179053_b = mode;
+-            GL11.glCullFace(mode);
++        if (mode != cullState.mode)
++        {
++            cullState.mode = mode;
++            VkRenderState.cullMode = mode;
+         }
+     }
+ 
+     public static void enablePolygonOffset()
+     {
+-        polygonOffsetState.field_179044_a.setEnabled();
++        polygonOffsetState.polygonOffsetFill.setEnabled();
+     }
+ 
+     public static void disablePolygonOffset()
+     {
+-        polygonOffsetState.field_179044_a.setDisabled();
++        polygonOffsetState.polygonOffsetFill.setDisabled();
+     }
+ 
+     public static void doPolygonOffset(float factor, float units)
+     {
+-        if (factor != polygonOffsetState.field_179043_c || units != polygonOffsetState.field_179041_d)
+-        {
+-            polygonOffsetState.field_179043_c = factor;
+-            polygonOffsetState.field_179041_d = units;
+-            GL11.glPolygonOffset(factor, units);
++        if (factor != polygonOffsetState.factor || units != polygonOffsetState.units)
++        {
++            polygonOffsetState.factor = factor;
++            polygonOffsetState.units = units;
++            VkRenderState.polygonOffsetFactor = factor;
++            VkRenderState.polygonOffsetUnits = units;
+         }
+     }
+ 
+     public static void enableColorLogic()
+     {
+-        colorLogicState.field_179197_a.setEnabled();
++        colorLogicState.colorLogicOp.setEnabled();
+     }
+ 
+     public static void disableColorLogic()
+     {
+-        colorLogicState.field_179197_a.setDisabled();
++        colorLogicState.colorLogicOp.setDisabled();
+     }
+ 
+     public static void colorLogicOp(int opcode)
+     {
+-        if (opcode != colorLogicState.field_179196_b)
+-        {
+-            colorLogicState.field_179196_b = opcode;
+-            GL11.glLogicOp(opcode);
++        if (opcode != colorLogicState.opcode)
++        {
++            colorLogicState.opcode = opcode;
++            // Only GL_INVERT (5386) is ever used (text selection); emulated via blend in VkPipelines.
+         }
+     }
+ 
+     public static void enableTexGenCoord(GlStateManager.TexGen p_179087_0_)
+     {
+-        texGenCoord(p_179087_0_).field_179067_a.setEnabled();
++        // No-op in core profile
+     }
+ 
+     public static void disableTexGenCoord(GlStateManager.TexGen p_179100_0_)
+     {
+-        texGenCoord(p_179100_0_).field_179067_a.setDisabled();
+-    }
+-
+-    public static void texGen(GlStateManager.TexGen p_179149_0_, int p_179149_1_)
+-    {
+-        GlStateManager.TexGenCoord glstatemanager$texgencoord = texGenCoord(p_179149_0_);
+-
+-        if (p_179149_1_ != glstatemanager$texgencoord.field_179066_c)
+-        {
+-            glstatemanager$texgencoord.field_179066_c = p_179149_1_;
+-            GL11.glTexGeni(glstatemanager$texgencoord.field_179065_b, GL11.GL_TEXTURE_GEN_MODE, p_179149_1_);
+-        }
++        // No-op in core profile
++    }
++
++    public static void texGen(GlStateManager.TexGen texGen, int param)
++    {
++        // No-op in core profile
+     }
+ 
+     public static void func_179105_a(GlStateManager.TexGen p_179105_0_, int pname, FloatBuffer params)
+     {
+-        GL11.glTexGen(texGenCoord(p_179105_0_).field_179065_b, pname, params);
++        // No-op in core profile
+     }
+ 
+     private static GlStateManager.TexGenCoord texGenCoord(GlStateManager.TexGen p_179125_0_)
+@@ -291,19 +375,19 @@
+         switch (p_179125_0_)
+         {
+             case S:
+-                return texGenState.field_179064_a;
++                return texGenState.s;
+ 
+             case T:
+-                return texGenState.field_179062_b;
++                return texGenState.t;
+ 
+             case R:
+-                return texGenState.field_179063_c;
++                return texGenState.r;
+ 
+             case Q:
+-                return texGenState.field_179061_d;
++                return texGenState.q;
+ 
+             default:
+-                return texGenState.field_179064_a;
++                return texGenState.s;
+         }
+     }
+ 
+@@ -318,28 +402,39 @@
+ 
+     public static void enableTexture2D()
+     {
++        texture2DEnabled = true;
+         textureState[activeTextureUnit].texture2DState.setEnabled();
+     }
+ 
+     public static void disableTexture2D()
+     {
++        texture2DEnabled = false;
+         textureState[activeTextureUnit].texture2DState.setDisabled();
+     }
+ 
++    public static boolean isTexture2DEnabled()
++    {
++        return texture2DEnabled;
++    }
++
+     public static int generateTexture()
+     {
+-        return GL11.glGenTextures();
++        return VkTextures.gen();
+     }
+ 
+     public static void deleteTexture(int texture)
+     {
+-        GL11.glDeleteTextures(texture);
+-
+-        for (GlStateManager.TextureState glstatemanager$texturestate : textureState)
+-        {
+-            if (glstatemanager$texturestate.textureName == texture)
++        if (texture != 0)
++        {
++            VkTextures.delete(texture);
++            VkDrawDispatch.onTextureDeleted(texture);
++
++            for (GlStateManager.TextureState glstatemanager$texturestate : textureState)
+             {
+-                glstatemanager$texturestate.textureName = -1;
++                if (glstatemanager$texturestate.textureName == texture)
++                {
++                    glstatemanager$texturestate.textureName = 0;
++                }
+             }
+         }
+     }
+@@ -348,44 +443,61 @@
+     {
+         if (texture != textureState[activeTextureUnit].textureName)
+         {
++            plutonium.gpu.Batches.flushAll();   // draw pending model geometry with the old texture
+             textureState[activeTextureUnit].textureName = texture;
+-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
++            VkDrawDispatch.bindTexture(texture);
+         }
+     }
+ 
+     public static void enableNormalize()
+     {
+-        normalizeState.setEnabled();
++        // No-op in core profile
+     }
+ 
+     public static void disableNormalize()
+     {
+-        normalizeState.setDisabled();
++        // No-op in core profile
+     }
+ 
+     public static void shadeModel(int mode)
+     {
+-        if (mode != activeShadeModel)
+-        {
+-            activeShadeModel = mode;
+-            GL11.glShadeModel(mode);
+-        }
++        // No-op in core profile (smooth shading is always on)
++        activeShadeModel = mode;
+     }
+ 
+     public static void enableRescaleNormal()
+     {
+-        rescaleNormalState.setEnabled();
++        // No-op in core profile
+     }
+ 
+     public static void disableRescaleNormal()
+     {
+-        rescaleNormalState.setDisabled();
++        // No-op in core profile
+     }
+ 
+     public static void viewport(int x, int y, int width, int height)
+     {
+-        GL11.glViewport(x, y, width, height);
+-    }
++        VkRenderState.viewportX = x;
++        VkRenderState.viewportY = y;
++        VkRenderState.viewportW = width;
++        VkRenderState.viewportH = height;
++    }
++
++    /**
++     * GL-convention scissor (bottom-left origin, like glScissor). Enable/disable rides
++     * the normal glEnable(GL_SCISSOR_TEST) path; the Y flip to Vulkan's top-left origin
++     * happens in VkDrawDispatch against the live render-target height.
++     */
++    public static void scissor(int x, int y, int width, int height)
++    {
++        VkRenderState.scissorX = x;
++        VkRenderState.scissorY = y;
++        VkRenderState.scissorW = width;
++        VkRenderState.scissorH = height;
++    }
++
++    public static void enableScissor() { VkRenderState.scissorEnabled = true; }
++    public static void disableScissor() { VkRenderState.scissorEnabled = false; }
+ 
+     public static void colorMask(boolean red, boolean green, boolean blue, boolean alpha)
+     {
+@@ -395,105 +507,126 @@
+             colorMaskState.green = green;
+             colorMaskState.blue = blue;
+             colorMaskState.alpha = alpha;
+-            GL11.glColorMask(red, green, blue, alpha);
++            VkRenderState.maskR = red;
++            VkRenderState.maskG = green;
++            VkRenderState.maskB = blue;
++            VkRenderState.maskA = alpha;
+         }
+     }
+ 
+     public static void clearDepth(double depth)
+     {
+-        if (depth != clearState.field_179205_a)
+-        {
+-            clearState.field_179205_a = depth;
+-            GL11.glClearDepth(depth);
++        if (depth != clearState.depth)
++        {
++            clearState.depth = depth;
++            VkRenderState.clearDepth = depth;
+         }
+     }
+ 
+     public static void clearColor(float red, float green, float blue, float alpha)
+     {
+-        if (red != clearState.field_179203_b.red || green != clearState.field_179203_b.green || blue != clearState.field_179203_b.blue || alpha != clearState.field_179203_b.alpha)
+-        {
+-            clearState.field_179203_b.red = red;
+-            clearState.field_179203_b.green = green;
+-            clearState.field_179203_b.blue = blue;
+-            clearState.field_179203_b.alpha = alpha;
+-            GL11.glClearColor(red, green, blue, alpha);
++        if (red != clearState.color.red || green != clearState.color.green || blue != clearState.color.blue || alpha != clearState.color.alpha)
++        {
++            clearState.color.red = red;
++            clearState.color.green = green;
++            clearState.color.blue = blue;
++            clearState.color.alpha = alpha;
++            VkRenderState.clearR = red;
++            VkRenderState.clearG = green;
++            VkRenderState.clearB = blue;
++            VkRenderState.clearA = alpha;
+         }
+     }
+ 
+     public static void clear(int mask)
+     {
+-        GL11.glClear(mask);
++        if (clearEnabled)
++        {
++            VkRenderTargets.clear((mask & 16384) != 0, (mask & 256) != 0);
++        }
+     }
+ 
+     public static void matrixMode(int mode)
+     {
+-        GL11.glMatrixMode(mode);
++        MatrixStack.setActiveStack(mode);
+     }
+ 
+     public static void loadIdentity()
+     {
+-        GL11.glLoadIdentity();
++        MatrixStack.loadIdentity();
+     }
+ 
+     public static void pushMatrix()
+     {
+-        GL11.glPushMatrix();
++        MatrixStack.push();
+     }
+ 
+     public static void popMatrix()
+     {
+-        GL11.glPopMatrix();
++        MatrixStack.pop();
+     }
+ 
+     public static void getFloat(int pname, FloatBuffer params)
+     {
+-        GL11.glGetFloat(pname, params);
++        // Read from software MatrixStack instead of GL pipeline (avoids stalls)
++        if (pname == 2982) // GL_MODELVIEW_MATRIX
++        {
++            MatrixStack.storeModelView(params);
++        }
++        else if (pname == 2983) // GL_PROJECTION_MATRIX
++        {
++            MatrixStack.storeProjection(params);
++        }
++        else
++        {
++            // Non-matrix glGetFloat has no Vulkan equivalent; leave the buffer untouched.
++        }
+     }
+ 
+     public static void ortho(double left, double right, double bottom, double top, double zNear, double zFar)
+     {
+-        GL11.glOrtho(left, right, bottom, top, zNear, zFar);
++        MatrixStack.ortho(left, right, bottom, top, zNear, zFar);
+     }
+ 
+     public static void rotate(float angle, float x, float y, float z)
+     {
+-        GL11.glRotatef(angle, x, y, z);
++        MatrixStack.rotate(angle, x, y, z);
+     }
+ 
+     public static void scale(float x, float y, float z)
+     {
+-        GL11.glScalef(x, y, z);
++        MatrixStack.scale(x, y, z);
+     }
+ 
+     public static void scale(double x, double y, double z)
+     {
+-        GL11.glScaled(x, y, z);
++        MatrixStack.scale((float) x, (float) y, (float) z);
+     }
+ 
+     public static void translate(float x, float y, float z)
+     {
+-        GL11.glTranslatef(x, y, z);
++        MatrixStack.translate(x, y, z);
+     }
+ 
+     public static void translate(double x, double y, double z)
+     {
+-        GL11.glTranslated(x, y, z);
++        MatrixStack.translate((float) x, (float) y, (float) z);
+     }
+ 
+     public static void multMatrix(FloatBuffer matrix)
+     {
+-        GL11.glMultMatrix(matrix);
++        MatrixStack.multiply(matrix);
+     }
+ 
+     public static void color(float colorRed, float colorGreen, float colorBlue, float colorAlpha)
+     {
+         if (colorRed != colorState.red || colorGreen != colorState.green || colorBlue != colorState.blue || colorAlpha != colorState.alpha)
+         {
++            plutonium.gpu.Batches.flushAll();   // pending model geometry uses the old color
+             colorState.red = colorRed;
+             colorState.green = colorGreen;
+             colorState.blue = colorBlue;
+             colorState.alpha = colorAlpha;
+-            GL11.glColor4f(colorRed, colorGreen, colorBlue, colorAlpha);
+         }
+     }
+ 
+@@ -502,14 +635,354 @@
+         color(colorRed, colorGreen, colorBlue, 1.0F);
+     }
+ 
++    /**
++     * Set the entity hurt-flash / colour overlay. Flushes pending model geometry first so it
++     * draws with the previous overlay value (entity models are deferred via ModelBatch and
++     * flushed on state change — see {@link #color}).
++     */
++    public static void setEntityOverlay(float r, float g, float b, float a)
++    {
++        if (r != overlayR || g != overlayG || b != overlayB || a != overlayA)
++        {
++            plutonium.gpu.Batches.flushAll();   // pending model geometry uses the old overlay
++            overlayR = r; overlayG = g; overlayB = b; overlayA = a;
++        }
++    }
++
+     public static void resetColor()
+     {
++        if (colorState.red != -1.0F || colorState.green != -1.0F || colorState.blue != -1.0F || colorState.alpha != -1.0F)
++        {
++            plutonium.gpu.Batches.flushAll();
++        }
+         colorState.red = colorState.green = colorState.blue = colorState.alpha = -1.0F;
+     }
+ 
++    public static void glNormalPointer(int p_glNormalPointer_0_, int p_glNormalPointer_1_, ByteBuffer p_glNormalPointer_2_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glTexCoordPointer(int p_glTexCoordPointer_0_, int p_glTexCoordPointer_1_, int p_glTexCoordPointer_2_, int p_glTexCoordPointer_3_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glTexCoordPointer(int p_glTexCoordPointer_0_, int p_glTexCoordPointer_1_, int p_glTexCoordPointer_2_, ByteBuffer p_glTexCoordPointer_3_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glVertexPointer(int p_glVertexPointer_0_, int p_glVertexPointer_1_, int p_glVertexPointer_2_, int p_glVertexPointer_3_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glVertexPointer(int p_glVertexPointer_0_, int p_glVertexPointer_1_, int p_glVertexPointer_2_, ByteBuffer p_glVertexPointer_3_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glColorPointer(int p_glColorPointer_0_, int p_glColorPointer_1_, int p_glColorPointer_2_, int p_glColorPointer_3_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glColorPointer(int p_glColorPointer_0_, int p_glColorPointer_1_, int p_glColorPointer_2_, ByteBuffer p_glColorPointer_3_)
++    {
++        // No-op: replaced by VAO vertex attrib pointers
++    }
++
++    public static void glDisableClientState(int p_glDisableClientState_0_)
++    {
++        // No-op: replaced by VAO vertex attrib arrays
++    }
++
++    public static void glEnableClientState(int p_glEnableClientState_0_)
++    {
++        // No-op: replaced by VAO vertex attrib arrays
++    }
++
++    public static void glBegin(int p_glBegin_0_)
++    {
++        // No-op: immediate mode removed in core profile
++    }
++
++    public static void glEnd()
++    {
++        // No-op: immediate mode removed in core profile
++    }
++
++    public static void glDrawArrays(int p_glDrawArrays_0_, int p_glDrawArrays_1_, int p_glDrawArrays_2_)
++    {
++        // Raw glDrawArrays callers (chunk VBO path) are rerouted in M3; nothing to draw from here.
++        plutonium.gpu.GLGuard.reportLegacy(null, p_glDrawArrays_0_, p_glDrawArrays_2_, false, false);
++    }
++
+     public static void callList(int list)
+     {
+-        GL11.glCallList(list);
++        // No-op: display lists removed in core profile
++    }
++
++    public static void callLists(IntBuffer p_callLists_0_)
++    {
++        // No-op: display lists removed in core profile
++    }
++
++    public static void glDeleteLists(int p_glDeleteLists_0_, int p_glDeleteLists_1_)
++    {
++        // No-op: display lists removed in core profile
++    }
++
++    public static void glNewList(int p_glNewList_0_, int p_glNewList_1_)
++    {
++        // No-op: display lists removed in core profile
++        creatingDisplayList = true;
++    }
++
++    public static void glEndList()
++    {
++        // No-op: display lists removed in core profile
++        creatingDisplayList = false;
++    }
++
++    public static int glGetError()
++    {
++        return 0;
++    }
++
++    public static void glTexImage2D(int target, int level, int internalFormat, int width, int height, int border, int format, int type, IntBuffer pixels)
++    {
++        if (target == 3553)   // GL_TEXTURE_2D only (proxy queries are stubbed by callers)
++        {
++            VkTextures.texImage2D(getBoundTexture(), level, width, height, pixels);
++        }
++    }
++
++    public static void glTexSubImage2D(int target, int level, int x, int y, int width, int height, int format, int type, IntBuffer pixels)
++    {
++        if (target == 3553)
++        {
++            VkTextures.texSubImage2D(getBoundTexture(), level, x, y, width, height, pixels);
++        }
++    }
++
++    public static void glCopyTexSubImage2D(int target, int level, int xoffset, int yoffset, int x, int y, int width, int height)
++    {
++        // Copy-from-framebuffer (panorama blur): M4 (VkTexture.copyFromTarget). No-op until then.
++    }
++
++    public static void glGetTexImage(int target, int level, int format, int type, IntBuffer pixels)
++    {
++        // Texture readback: M4 (screenshots / ShadersTex). No-op until then.
++    }
++
++    public static void glTexParameterf(int target, int pname, float param)
++    {
++        if (target == 3553)
++        {
++            VkTextures.setParam(getBoundTexture(), pname, param);
++        }
++    }
++
++    public static void glTexParameteri(int target, int pname, int param)
++    {
++        if (target == 3553)
++        {
++            VkTextures.setParam(getBoundTexture(), pname, param);
++        }
++    }
++
++    public static int glGetTexLevelParameteri(int target, int level, int pname)
++    {
++        VkTextures.Tex tex = VkTextures.get(getBoundTexture());
++        if (tex == null) return 0;
++        if (pname == 4096) return Math.max(1, tex.width >> level);    // GL_TEXTURE_WIDTH
++        if (pname == 4097) return Math.max(1, tex.height >> level);   // GL_TEXTURE_HEIGHT
++        return 0;
++    }
++
++    public static int getActiveTextureUnit()
++    {
++        return OpenGlHelper.defaultTexUnit + activeTextureUnit;
++    }
++
++    public static void bindCurrentTexture()
++    {
++        VkDrawDispatch.bindTexture(textureState[activeTextureUnit].textureName);
++    }
++
++    public static int getBoundTexture()
++    {
++        return textureState[activeTextureUnit].textureName;
++    }
++
++    public static void checkBoundTexture()
++    {
++        // Vulkan: our own tracking IS the source of truth; nothing to cross-check.
++    }
++
++    public static void deleteTextures(IntBuffer p_deleteTextures_0_)
++    {
++        p_deleteTextures_0_.rewind();
++
++        while (p_deleteTextures_0_.position() < p_deleteTextures_0_.limit())
++        {
++            int i = p_deleteTextures_0_.get();
++            deleteTexture(i);
++        }
++
++        p_deleteTextures_0_.rewind();
++    }
++
++    public static boolean isFogEnabled()
++    {
++        return fogState.fog.currentState;
++    }
++
++    public static void setFogEnabled(boolean p_setFogEnabled_0_)
++    {
++        fogState.fog.setState(p_setFogEnabled_0_);
++    }
++
++    /** Snapshot of the blend state, for batches that restore it after drawing. */
++    public static final class BlendSnapshot
++    {
++        boolean enabled;
++        int srcFactor = 1, dstFactor, srcFactorAlpha = 1, dstFactorAlpha;
++    }
++
++    public static void getBlendState(BlendSnapshot out)
++    {
++        out.enabled = blendState.blend.currentState;
++        out.srcFactor = blendState.srcFactor;
++        out.dstFactor = blendState.dstFactor;
++        out.srcFactorAlpha = blendState.srcFactorAlpha;
++        out.dstFactorAlpha = blendState.dstFactorAlpha;
++    }
++
++    public static void setBlendState(BlendSnapshot in)
++    {
++        blendState.blend.setState(in.enabled);
++        tryBlendFuncSeparate(in.srcFactor, in.dstFactor, in.srcFactorAlpha, in.dstFactorAlpha);
++    }
++
++    public static void glMultiDrawArrays(int mode, IntBuffer first, IntBuffer count)
++    {
++        // Chunk multi-draw is rerouted in M3.
++        plutonium.gpu.GLGuard.reportLegacy(null, mode, 0, false, false);
++    }
++
++    // --- Shader uniform sync ---
++
++    private static final plutonium.gpu.math.Matrix4f IDENTITY_TEX_MATRIX = new plutonium.gpu.math.Matrix4f();
++
++    public static void syncUniforms(ShaderProgram program)
++    {
++        if (program == null) return;
++        plutonium.gpu.DrawStats.uniformSyncs++;
++
++        FloatBuffer buf = MatrixStack.getSharedBuffer();
++        long mvpV = MatrixStack.getMvpVersion();
++        if (ShaderProgram.globalSyncedMvpVersion != mvpV)
++        {
++            MatrixStack.storeMVP(buf);
++            program.setMVP(buf);   // value-compares; counts DrawStats.mvpUploads itself
++            ShaderProgram.globalSyncedMvpVersion = mvpV;
++        }
++
++        float cr = colorState.red < 0 ? 1.0f : colorState.red;
++        float cg = colorState.green < 0 ? 1.0f : colorState.green;
++        float cb = colorState.blue < 0 ? 1.0f : colorState.blue;
++        float ca = colorState.alpha < 0 ? 1.0f : colorState.alpha;
++        program.setColorModifier(cr, cg, cb, ca);
++        program.setOverlayColor(overlayR, overlayG, overlayB, overlayA);
++        // Entity lightmap coord (block+sky light at the entity). No-op for shaders without
++        // the uniform (terrain uses per-vertex UV1 instead).
++        program.setLightmapCoord(OpenGlHelper.lastBrightnessX, OpenGlHelper.lastBrightnessY);
++
++        program.setSampler0(0);
++        program.setSampler1(1);
++
++        float alphaRef = alphaState.alphaTest.currentState ? alphaState.ref : 0.0f;
++        program.setAlphaDiscard(alphaRef);
++
++        program.setFogEnabled(fogState.fog.currentState);
++        if (fogState.fog.currentState)
++        {
++            program.setFogMode(fogState.mode);
++            program.setFogStart(fogState.start);
++            program.setFogEnd(fogState.end);
++            program.setFogDensity(fogState.density);
++            program.setFogColor(fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
++        }
++
++        program.setLightingEnabled(lightingEnabled);
++        if (lightingEnabled)
++        {
++            program.setLight0Dir(lightPositions[0][0], lightPositions[0][1], lightPositions[0][2]);
++            program.setLight1Dir(lightPositions[1][0], lightPositions[1][1], lightPositions[1][2]);
++            program.setLightDiffuse(lightDiffuse[0][0], lightDiffuse[0][1], lightDiffuse[0][2]);
++            program.setLightAmbient(lightAmbient[0], lightAmbient[1], lightAmbient[2]);
++        }
++
++        // No texture-matrix upload: it isn't in the push-constant block, so
++        // ShaderProgram.setTextureMatrix is a no-op and storing the matrix into the shared
++        // buffer every draw was pure waste. Re-add here (and to the block) if a texture
++        // matrix is ever needed — the enchantment glint is the only GL user.
++    }
++
++    // --- Light state storage for shader uniforms ---
++
++    public static void setLightPosition(int light, FloatBuffer pos)
++    {
++        if (light >= 0 && light < 2 && pos.remaining() >= 4)
++        {
++            // Transform light direction by current modelview matrix
++            plutonium.gpu.math.Matrix4f mv = MatrixStack.getModelView();
++            float x = pos.get(pos.position());
++            float y = pos.get(pos.position() + 1);
++            float z = pos.get(pos.position() + 2);
++            float w = pos.get(pos.position() + 3);
++
++            if (w == 0.0f)
++            {
++                // Directional light: transform direction by upper 3x3 of modelview
++                lightPositions[light][0] = mv.m00 * x + mv.m10 * y + mv.m20 * z;
++                lightPositions[light][1] = mv.m01 * x + mv.m11 * y + mv.m21 * z;
++                lightPositions[light][2] = mv.m02 * x + mv.m12 * y + mv.m22 * z;
++            }
++            else
++            {
++                // Positional light: full transform
++                lightPositions[light][0] = mv.m00 * x + mv.m10 * y + mv.m20 * z + mv.m30;
++                lightPositions[light][1] = mv.m01 * x + mv.m11 * y + mv.m21 * z + mv.m31;
++                lightPositions[light][2] = mv.m02 * x + mv.m12 * y + mv.m22 * z + mv.m32;
++            }
++            lightPositions[light][3] = w;
++        }
++    }
++
++    public static void setLightDiffuse(int light, float r, float g, float b)
++    {
++        if (light >= 0 && light < 2)
++        {
++            lightDiffuse[light][0] = r;
++            lightDiffuse[light][1] = g;
++            lightDiffuse[light][2] = b;
++        }
++    }
++
++    public static void setLightAmbient(float r, float g, float b)
++    {
++        lightAmbient[0] = r;
++        lightAmbient[1] = g;
++        lightAmbient[2] = b;
++    }
++
++    public static boolean isLightingEnabled()
++    {
++        return lightingEnabled;
+     }
+ 
+     static
+@@ -519,7 +992,7 @@
+             lightState[i] = new GlStateManager.BooleanState(16384 + i);
+         }
+ 
+-        for (int j = 0; j < 8; ++j)
++        for (int j = 0; j < textureState.length; ++j)
+         {
+             textureState[j] = new GlStateManager.TextureState();
+         }
+@@ -527,21 +1000,21 @@
+ 
+     static class AlphaState
+     {
+-        public GlStateManager.BooleanState field_179208_a;
++        public GlStateManager.BooleanState alphaTest;
+         public int func;
+         public float ref;
+ 
+         private AlphaState()
+         {
+-            this.field_179208_a = new GlStateManager.BooleanState(3008);
+-            this.func = 519;
+-            this.ref = -1.0F;
++            this.alphaTest = new GlStateManager.BooleanState(3008);
++            this.func = 516;
++            this.ref = 0.1F;
+         }
+     }
+ 
+     static class BlendState
+     {
+-        public GlStateManager.BooleanState field_179213_a;
++        public GlStateManager.BooleanState blend;
+         public int srcFactor;
+         public int dstFactor;
+         public int srcFactorAlpha;
+@@ -549,7 +1022,7 @@
+ 
+         private BlendState()
+         {
+-            this.field_179213_a = new GlStateManager.BooleanState(3042);
++            this.blend = new GlStateManager.BooleanState(3042);
+             this.srcFactor = 1;
+             this.dstFactor = 0;
+             this.srcFactorAlpha = 1;
+@@ -560,11 +1033,34 @@
+     static class BooleanState
+     {
+         private final int capability;
+-        private boolean currentState = false;
++        private final boolean isCoreProfileCapability;
++        public boolean currentState = false;
+ 
+         public BooleanState(int capabilityIn)
+         {
+             this.capability = capabilityIn;
++            this.isCoreProfileCapability = isCoreCapability(capabilityIn);
++        }
++
++        private static boolean isCoreCapability(int cap)
++        {
++            // Only these capabilities exist in GL 3.3 core profile
++            return cap == 3042  // GL_BLEND
++                || cap == 2884  // GL_CULL_FACE
++                || cap == 2929  // GL_DEPTH_TEST
++                || cap == 3024  // GL_DITHER
++                || cap == 32823 // GL_POLYGON_OFFSET_FILL
++                || cap == 10754 // GL_POLYGON_OFFSET_LINE
++                || cap == 32926 // GL_SAMPLE_ALPHA_TO_COVERAGE
++                || cap == 32928 // GL_SAMPLE_COVERAGE
++                || cap == 3089  // GL_SCISSOR_TEST
++                || cap == 2960  // GL_STENCIL_TEST
++                // GL_TEXTURE_2D (3553) is NOT valid for glEnable in core profile
++                || cap == 3058  // GL_COLOR_LOGIC_OP
++                || cap == 32925 // GL_MULTISAMPLE
++                || cap == 34895 // GL_RASTERIZER_DISCARD
++                || cap == 36281 // GL_FRAMEBUFFER_SRGB
++                ;
+         }
+ 
+         public void setDisabled()
+@@ -583,13 +1079,15 @@
+             {
+                 this.currentState = state;
+ 
+-                if (state)
++                switch (this.capability)
+                 {
+-                    GL11.glEnable(this.capability);
+-                }
+-                else
+-                {
+-                    GL11.glDisable(this.capability);
++                    case 3042:  VkRenderState.blendEnabled = state; break;         // GL_BLEND
++                    case 2884:  VkRenderState.cullEnabled = state; break;          // GL_CULL_FACE
++                    case 2929:  VkRenderState.depthTest = state; break;            // GL_DEPTH_TEST
++                    case 3089:  VkRenderState.scissorEnabled = state; break;       // GL_SCISSOR_TEST
++                    case 32823: VkRenderState.polygonOffsetEnabled = state; break; // GL_POLYGON_OFFSET_FILL
++                    case 3058:  VkRenderState.logicOpEnabled = state; break;       // GL_COLOR_LOGIC_OP
++                    default: break;                                                 // tracked only
+                 }
+             }
+         }
+@@ -597,14 +1095,14 @@
+ 
+     static class ClearState
+     {
+-        public double field_179205_a;
+-        public GlStateManager.Color field_179203_b;
++        public double depth;
++        public GlStateManager.Color color;
+         public int field_179204_c;
+ 
+         private ClearState()
+         {
+-            this.field_179205_a = 1.0D;
+-            this.field_179203_b = new GlStateManager.Color(0.0F, 0.0F, 0.0F, 0.0F);
++            this.depth = 1.0D;
++            this.color = new GlStateManager.Color(0.0F, 0.0F, 0.0F, 0.0F);
+             this.field_179204_c = 0;
+         }
+     }
+@@ -631,13 +1129,13 @@
+ 
+     static class ColorLogicState
+     {
+-        public GlStateManager.BooleanState field_179197_a;
+-        public int field_179196_b;
++        public GlStateManager.BooleanState colorLogicOp;
++        public int opcode;
+ 
+         private ColorLogicState()
+         {
+-            this.field_179197_a = new GlStateManager.BooleanState(3058);
+-            this.field_179196_b = 5379;
++            this.colorLogicOp = new GlStateManager.BooleanState(3058);
++            this.opcode = 5379;
+         }
+     }
+ 
+@@ -659,27 +1157,27 @@
+ 
+     static class ColorMaterialState
+     {
+-        public GlStateManager.BooleanState field_179191_a;
+-        public int field_179189_b;
+-        public int field_179190_c;
++        public GlStateManager.BooleanState colorMaterial;
++        public int face;
++        public int mode;
+ 
+         private ColorMaterialState()
+         {
+-            this.field_179191_a = new GlStateManager.BooleanState(2903);
+-            this.field_179189_b = 1032;
+-            this.field_179190_c = 5634;
++            this.colorMaterial = new GlStateManager.BooleanState(2903);
++            this.face = 1032;
++            this.mode = 5634;
+         }
+     }
+ 
+     static class CullState
+     {
+-        public GlStateManager.BooleanState field_179054_a;
+-        public int field_179053_b;
++        public GlStateManager.BooleanState cullFace;
++        public int mode;
+ 
+         private CullState()
+         {
+-            this.field_179054_a = new GlStateManager.BooleanState(2884);
+-            this.field_179053_b = 1029;
++            this.cullFace = new GlStateManager.BooleanState(2884);
++            this.mode = 1029;
+         }
+     }
+ 
+@@ -699,35 +1197,35 @@
+ 
+     static class FogState
+     {
+-        public GlStateManager.BooleanState field_179049_a;
+-        public int field_179047_b;
+-        public float field_179048_c;
+-        public float field_179045_d;
+-        public float field_179046_e;
++        public GlStateManager.BooleanState fog;
++        public int mode;
++        public float density;
++        public float start;
++        public float end;
+ 
+         private FogState()
+         {
+-            this.field_179049_a = new GlStateManager.BooleanState(2912);
+-            this.field_179047_b = 2048;
+-            this.field_179048_c = 1.0F;
+-            this.field_179045_d = 0.0F;
+-            this.field_179046_e = 1.0F;
++            this.fog = new GlStateManager.BooleanState(2912);
++            this.mode = 2048;
++            this.density = 1.0F;
++            this.start = 0.0F;
++            this.end = 1.0F;
+         }
+     }
+ 
+     static class PolygonOffsetState
+     {
+-        public GlStateManager.BooleanState field_179044_a;
+-        public GlStateManager.BooleanState field_179042_b;
+-        public float field_179043_c;
+-        public float field_179041_d;
++        public GlStateManager.BooleanState polygonOffsetFill;
++        public GlStateManager.BooleanState polygonOffsetLine;
++        public float factor;
++        public float units;
+ 
+         private PolygonOffsetState()
+         {
+-            this.field_179044_a = new GlStateManager.BooleanState(32823);
+-            this.field_179042_b = new GlStateManager.BooleanState(10754);
+-            this.field_179043_c = 0.0F;
+-            this.field_179041_d = 0.0F;
++            this.polygonOffsetFill = new GlStateManager.BooleanState(32823);
++            this.polygonOffsetLine = new GlStateManager.BooleanState(10754);
++            this.factor = 0.0F;
++            this.units = 0.0F;
+         }
+     }
+ 
+@@ -773,30 +1271,30 @@
+ 
+     static class TexGenCoord
+     {
+-        public GlStateManager.BooleanState field_179067_a;
+-        public int field_179065_b;
+-        public int field_179066_c = -1;
++        public GlStateManager.BooleanState textureGen;
++        public int coord;
++        public int param = -1;
+ 
+         public TexGenCoord(int p_i46254_1_, int p_i46254_2_)
+         {
+-            this.field_179065_b = p_i46254_1_;
+-            this.field_179067_a = new GlStateManager.BooleanState(p_i46254_2_);
++            this.coord = p_i46254_1_;
++            this.textureGen = new GlStateManager.BooleanState(p_i46254_2_);
+         }
+     }
+ 
+     static class TexGenState
+     {
+-        public GlStateManager.TexGenCoord field_179064_a;
+-        public GlStateManager.TexGenCoord field_179062_b;
+-        public GlStateManager.TexGenCoord field_179063_c;
+-        public GlStateManager.TexGenCoord field_179061_d;
++        public GlStateManager.TexGenCoord s;
++        public GlStateManager.TexGenCoord t;
++        public GlStateManager.TexGenCoord r;
++        public GlStateManager.TexGenCoord q;
+ 
+         private TexGenState()
+         {
+-            this.field_179064_a = new GlStateManager.TexGenCoord(8192, 3168);
+-            this.field_179062_b = new GlStateManager.TexGenCoord(8193, 3169);
+-            this.field_179063_c = new GlStateManager.TexGenCoord(8194, 3170);
+-            this.field_179061_d = new GlStateManager.TexGenCoord(8195, 3171);
++            this.s = new GlStateManager.TexGenCoord(8192, 3168);
++            this.t = new GlStateManager.TexGenCoord(8193, 3169);
++            this.r = new GlStateManager.TexGenCoord(8194, 3170);
++            this.q = new GlStateManager.TexGenCoord(8195, 3171);
+         }
+     }
+ 

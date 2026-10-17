@@ -1,0 +1,20 @@
+--- a/net/minecraft/client/gui/GuiClickableScrolledSelectionListProxy.java
++++ b/net/minecraft/client/gui/GuiClickableScrolledSelectionListProxy.java
+@@ -3,7 +3,7 @@
+ import net.minecraft.client.Minecraft;
+ import net.minecraft.realms.RealmsClickableScrolledSelectionList;
+ import net.minecraft.realms.Tezzelator;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.MouseShim;
+ 
+ public class GuiClickableScrolledSelectionListProxy extends GuiSlot
+ {
+@@ -69,7 +69,7 @@
+     {
+         super.handleMouseInput();
+ 
+-        if (this.scrollMultiplier > 0.0F && Mouse.getEventButtonState())
++        if (this.scrollMultiplier > 0.0F && MouseShim.getEventButtonState())
+         {
+             this.field_178046_u.customMouseEvent(this.top, this.bottom, this.headerPadding, this.amountScrolled, this.slotHeight);
+         }

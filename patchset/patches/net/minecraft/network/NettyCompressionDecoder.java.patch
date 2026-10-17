@@ -1,0 +1,64 @@
+--- a/net/minecraft/network/NettyCompressionDecoder.java
++++ b/net/minecraft/network/NettyCompressionDecoder.java
+@@ -13,11 +13,22 @@
+ {
+     private final Inflater inflater;
+     private int treshold;
++    private byte[] inputBuffer = new byte[8192];
++    private byte[] outputBuffer = new byte[8192];
+ 
+     public NettyCompressionDecoder(int treshold)
+     {
+         this.treshold = treshold;
+         this.inflater = new Inflater();
++    }
++
++    private byte[] getBuffer(byte[] existing, int needed)
++    {
++        if (existing.length >= needed)
++        {
++            return existing;
++        }
++        return new byte[needed];
+     }
+ 
+     protected void decode(ChannelHandlerContext p_decode_1_, ByteBuf p_decode_2_, List<Object> p_decode_3_) throws DataFormatException, Exception
+@@ -29,6 +40,11 @@
+ 
+             if (i == 0)
+             {
++                if (plutonium.NetStats.ENABLED)
++                {
++                    plutonium.NetStats.recordUncompressed(packetbuffer.readableBytes());
++                }
++
+                 p_decode_3_.add(packetbuffer.readBytes(packetbuffer.readableBytes()));
+             }
+             else
+@@ -43,12 +59,20 @@
+                     throw new DecoderException("Badly compressed packet - size of " + i + " is larger than protocol maximum of " + 2097152);
+                 }
+ 
+-                byte[] abyte = new byte[packetbuffer.readableBytes()];
+-                packetbuffer.readBytes(abyte);
+-                this.inflater.setInput(abyte);
+-                byte[] abyte1 = new byte[i];
+-                this.inflater.inflate(abyte1);
+-                p_decode_3_.add(Unpooled.wrappedBuffer(abyte1));
++                int compressedSize = packetbuffer.readableBytes();
++                this.inputBuffer = this.getBuffer(this.inputBuffer, compressedSize);
++                packetbuffer.readBytes(this.inputBuffer, 0, compressedSize);
++                long inflateStart = plutonium.NetStats.ENABLED ? System.nanoTime() : 0L;
++                this.inflater.setInput(this.inputBuffer, 0, compressedSize);
++                this.outputBuffer = this.getBuffer(this.outputBuffer, i);
++                this.inflater.inflate(this.outputBuffer, 0, i);
++
++                if (plutonium.NetStats.ENABLED)
++                {
++                    plutonium.NetStats.recordInflate(compressedSize, i, System.nanoTime() - inflateStart);
++                }
++
++                p_decode_3_.add(Unpooled.copiedBuffer(this.outputBuffer, 0, i));
+                 this.inflater.reset();
+             }
+         }

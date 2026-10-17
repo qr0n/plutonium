@@ -1,0 +1,17 @@
+--- a/net/minecraft/client/renderer/chunk/ChunkRenderDispatcher.java
++++ b/net/minecraft/client/renderer/chunk/ChunkRenderDispatcher.java
+@@ -261,12 +261,12 @@
+ 
+     private void uploadDisplayList(WorldRenderer p_178510_1_, int p_178510_2_, RenderChunk chunkRenderer)
+     {
+-        GL11.glNewList(p_178510_2_, GL11.GL_COMPILE);
++        // glNewList removed (core profile)
+         GlStateManager.pushMatrix();
+         chunkRenderer.multModelviewMatrix();
+         this.worldVertexUploader.func_181679_a(p_178510_1_);
+         GlStateManager.popMatrix();
+-        GL11.glEndList();
++        // glEndList removed (core profile)
+     }
+ 
+     private void uploadVertexBuffer(WorldRenderer p_178506_1_, VertexBuffer vertexBufferIn)

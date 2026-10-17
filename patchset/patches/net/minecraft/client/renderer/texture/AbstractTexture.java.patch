@@ -1,0 +1,21 @@
+--- a/net/minecraft/client/renderer/texture/AbstractTexture.java
++++ b/net/minecraft/client/renderer/texture/AbstractTexture.java
+@@ -1,6 +1,6 @@
+ package net.minecraft.client.renderer.texture;
+ 
+-import org.lwjgl.opengl.GL11;
++import net.minecraft.client.renderer.GlStateManager;
+ 
+ public abstract class AbstractTexture implements ITextureObject
+ {
+@@ -28,8 +28,8 @@
+             j = 9728;
+         }
+ 
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, i);
+-        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, j);
++        GlStateManager.glTexParameteri(3553, 10241, i);
++        GlStateManager.glTexParameteri(3553, 10240, j);
+     }
+ 
+     public void setBlurMipmap(boolean p_174936_1_, boolean p_174936_2_)

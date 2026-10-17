@@ -1,0 +1,126 @@
+--- a/net/minecraft/client/gui/GuiScreen.java
++++ b/net/minecraft/client/gui/GuiScreen.java
+@@ -40,8 +40,8 @@
+ import org.apache.commons.lang3.StringUtils;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.input.Keyboard;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.KeyboardShim;
++import plutonium.gpu.MouseShim;
+ import tv.twitch.chat.ChatUserInfo;
+ 
+ public abstract class GuiScreen extends Gui implements GuiYesNoCallback
+@@ -91,21 +91,17 @@
+ 
+     public static String getClipboardString()
+     {
++        // GLFW clipboard, not AWT: the client runs with -Djava.awt.headless=true, where
++        // Toolkit.getSystemClipboard() throws HeadlessException.
+         try
+         {
+-            Transferable transferable = Toolkit.getDefaultToolkit().getSystemClipboard().getContents((Object)null);
+-
+-            if (transferable != null && transferable.isDataFlavorSupported(DataFlavor.stringFlavor))
+-            {
+-                return (String)transferable.getTransferData(DataFlavor.stringFlavor);
+-            }
++            String s = org.lwjgl.glfw.GLFW.glfwGetClipboardString(plutonium.gpu.WindowManager.getHandle());
++            return s != null ? s : "";
+         }
+         catch (Exception var1)
+         {
+-            ;
+-        }
+-
+-        return "";
++            return "";
++        }
+     }
+ 
+     public static void setClipboardString(String copyText)
+@@ -114,8 +110,7 @@
+         {
+             try
+             {
+-                StringSelection stringselection = new StringSelection(copyText);
+-                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(stringselection, (ClipboardOwner)null);
++                org.lwjgl.glfw.GLFW.glfwSetClipboardString(plutonium.gpu.WindowManager.getHandle(), copyText);
+             }
+             catch (Exception var2)
+             {
+@@ -495,17 +490,17 @@
+ 
+     public void handleInput() throws IOException
+     {
+-        if (Mouse.isCreated())
+-        {
+-            while (Mouse.next())
++        if (MouseShim.isCreated())
++        {
++            while (MouseShim.next())
+             {
+                 this.handleMouseInput();
+             }
+         }
+ 
+-        if (Keyboard.isCreated())
+-        {
+-            while (Keyboard.next())
++        if (KeyboardShim.isCreated())
++        {
++            while (KeyboardShim.next())
+             {
+                 this.handleKeyboardInput();
+             }
+@@ -514,11 +509,11 @@
+ 
+     public void handleMouseInput() throws IOException
+     {
+-        int i = Mouse.getEventX() * this.width / this.mc.displayWidth;
+-        int j = this.height - Mouse.getEventY() * this.height / this.mc.displayHeight - 1;
+-        int k = Mouse.getEventButton();
+-
+-        if (Mouse.getEventButtonState())
++        int i = MouseShim.getEventX() * this.width / this.mc.displayWidth;
++        int j = this.height - MouseShim.getEventY() * this.height / this.mc.displayHeight - 1;
++        int k = MouseShim.getEventButton();
++
++        if (MouseShim.getEventButtonState())
+         {
+             if (this.mc.gameSettings.touchscreen && this.touchValue++ > 0)
+             {
+@@ -548,9 +543,9 @@
+ 
+     public void handleKeyboardInput() throws IOException
+     {
+-        if (Keyboard.getEventKeyState())
+-        {
+-            this.keyTyped(Keyboard.getEventCharacter(), Keyboard.getEventKey());
++        if (KeyboardShim.getEventKeyState())
++        {
++            this.keyTyped(KeyboardShim.getEventCharacter(), KeyboardShim.getEventKey());
+         }
+ 
+         this.mc.dispatchKeypresses();
+@@ -633,17 +628,17 @@
+ 
+     public static boolean isCtrlKeyDown()
+     {
+-        return Minecraft.isRunningOnMac ? Keyboard.isKeyDown(219) || Keyboard.isKeyDown(220) : Keyboard.isKeyDown(29) || Keyboard.isKeyDown(157);
++        return Minecraft.isRunningOnMac ? KeyboardShim.isKeyDown(219) || KeyboardShim.isKeyDown(220) : KeyboardShim.isKeyDown(29) || KeyboardShim.isKeyDown(157);
+     }
+ 
+     public static boolean isShiftKeyDown()
+     {
+-        return Keyboard.isKeyDown(42) || Keyboard.isKeyDown(54);
++        return KeyboardShim.isKeyDown(42) || KeyboardShim.isKeyDown(54);
+     }
+ 
+     public static boolean isAltKeyDown()
+     {
+-        return Keyboard.isKeyDown(56) || Keyboard.isKeyDown(184);
++        return KeyboardShim.isKeyDown(56) || KeyboardShim.isKeyDown(184);
+     }
+ 
+     public static boolean isKeyComboCtrlX(int p_175277_0_)

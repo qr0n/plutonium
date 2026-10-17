@@ -1,0 +1,10 @@
+--- a/runtime/mcp.py
++++ b/runtime/mcp.py
+@@ -6,6 +6,7 @@
+ @version: v1.0
+ """
+ 
++from py2compat import open
+ import time
+ 
+ from commands import CLIENT, SIDE_NAME

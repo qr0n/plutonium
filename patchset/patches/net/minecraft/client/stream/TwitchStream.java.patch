@@ -1,0 +1,13 @@
+--- a/net/minecraft/client/stream/TwitchStream.java
++++ b/net/minecraft/client/stream/TwitchStream.java
+@@ -230,8 +230,8 @@
+                 float f2 = (float)framebuffer1.framebufferWidth / (float)framebuffer1.framebufferTextureWidth;
+                 float f3 = (float)framebuffer1.framebufferHeight / (float)framebuffer1.framebufferTextureHeight;
+                 framebuffer1.bindFramebufferTexture();
+-                GL11.glTexParameterf(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, 9729.0F);
+-                GL11.glTexParameterf(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, 9729.0F);
++                GlStateManager.glTexParameterf(3553, 10241, 9729.0F);
++                GlStateManager.glTexParameterf(3553, 10240, 9729.0F);
+                 Tessellator tessellator = Tessellator.getInstance();
+                 WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+                 worldrenderer.begin(7, DefaultVertexFormats.POSITION_TEX);

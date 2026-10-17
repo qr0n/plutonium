@@ -1,0 +1,20 @@
+--- a/net/minecraft/client/gui/achievement/GuiStats.java
++++ b/net/minecraft/client/gui/achievement/GuiStats.java
+@@ -26,7 +26,7 @@
+ import net.minecraft.stats.StatFileWriter;
+ import net.minecraft.stats.StatList;
+ import net.minecraft.util.ResourceLocation;
+-import org.lwjgl.input.Mouse;
++import plutonium.gpu.MouseShim;
+ 
+ public class GuiStats extends GuiScreen implements IProgressMeter
+ {
+@@ -229,7 +229,7 @@
+ 
+         protected void drawListHeader(int p_148129_1_, int p_148129_2_, Tessellator p_148129_3_)
+         {
+-            if (!Mouse.isButtonDown(0))
++            if (!MouseShim.isButtonDown(0))
+             {
+                 this.field_148218_l = -1;
+             }

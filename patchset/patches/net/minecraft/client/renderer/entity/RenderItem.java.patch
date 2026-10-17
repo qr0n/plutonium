@@ -1,0 +1,90 @@
+--- a/net/minecraft/client/renderer/entity/RenderItem.java
++++ b/net/minecraft/client/renderer/entity/RenderItem.java
+@@ -62,6 +62,8 @@
+ {
+     private static final ResourceLocation RES_ITEM_GLINT = new ResourceLocation("textures/misc/enchanted_item_glint.png");
+     private boolean field_175058_l = true;
++    /** True while renderEffect's glint passes run — they must never be captured by ItemBatch. */
++    private boolean renderingEffect = false;
+     public float zLevel;
+     private final ItemModelMesher itemModelMesher;
+     private final TextureManager textureManager;
+@@ -115,6 +117,31 @@
+ 
+     private void renderModel(IBakedModel model, int color, ItemStack stack)
+     {
++        // World-pass items (dropped entities, held items, item frames) defer into ItemBatch:
++        // capture the baked quads through the normal renderQuads path (tints included), then
++        // bake the live modelview into the just-added positions. One draw per frame replaces
++        // one per renderModel call. Stays inline: glint passes (texture-matrix scroll +
++        // additive blend) and ANY enchanted item — its glint pass
++        // depth-tests GL_EQUAL against the base item's depth, which a deferred base has not
++        // written yet (the glint would vanish).
++        if (plutonium.gpu.ItemBatch.capturing() && stack != null && !stack.hasEffect()
++                && !this.renderingEffect
++                && GlStateManager.getBoundTexture() == Minecraft.getMinecraft().getTextureMapBlocks().getGlTextureId())
++        {
++            WorldRenderer buf = plutonium.gpu.ItemBatch.buffer();
++            int start = buf.getVertexCount();
++
++            for (EnumFacing enumfacing : EnumFacing.values())
++            {
++                this.renderQuads(buf, model.getFaceQuads(enumfacing), color, stack);
++            }
++
++            this.renderQuads(buf, model.getGeneralQuads(), color, stack);
++            buf.transformPositionsRange(start, plutonium.gpu.MatrixStack.getModelView());
++            plutonium.gpu.DrawStats.itemQuads += (buf.getVertexCount() - start) / 4;
++            return;
++        }
++
+         Tessellator tessellator = Tessellator.getInstance();
+         WorldRenderer worldrenderer = tessellator.getWorldRenderer();
+         worldrenderer.begin(7, DefaultVertexFormats.ITEM);
+@@ -160,6 +187,7 @@
+ 
+     private void renderEffect(IBakedModel model)
+     {
++        this.renderingEffect = true;
+         GlStateManager.depthMask(false);
+         GlStateManager.depthFunc(514);
+         GlStateManager.disableLighting();
+@@ -186,12 +214,37 @@
+         GlStateManager.depthFunc(515);
+         GlStateManager.depthMask(true);
+         this.textureManager.bindTexture(TextureMap.locationBlocksTexture);
++        this.renderingEffect = false;
+     }
+ 
+     private void putQuadNormal(WorldRenderer renderer, BakedQuad quad)
+     {
+         Vec3i vec3i = quad.getFace().getDirectionVec();
+-        renderer.putNormal((float)vec3i.getX(), (float)vec3i.getY(), (float)vec3i.getZ());
++        float x = (float)vec3i.getX();
++        float y = (float)vec3i.getY();
++        float z = (float)vec3i.getZ();
++
++        // The core entity shader (entity.vsh) computes diffuse as dot(normal, eye-space light),
++        // so it expects normals already in eye space — the same convention TexturedQuad.emitTransformed
++        // bakes for batched entity models. Item models are drawn through the real GUI/world modelview
++        // (positions go through u_MVP), but their face normals are object space, so without this bake
++        // GUI block icons collapse to ambient-only and render flat/dim. Rotate the face normal into eye
++        // space by the modelview's upper 3x3, then normalise — the GUI block transform carries a ~20x
++        // scale and putNormal quantises to a signed byte (x127), which would otherwise overflow.
++        plutonium.gpu.math.Matrix4f mv = plutonium.gpu.MatrixStack.getModelView();
++        float nx = mv.m00 * x + mv.m10 * y + mv.m20 * z;
++        float ny = mv.m01 * x + mv.m11 * y + mv.m21 * z;
++        float nz = mv.m02 * x + mv.m12 * y + mv.m22 * z;
++        float len = (float)Math.sqrt(nx * nx + ny * ny + nz * nz);
++
++        if (len > 1.0e-6F)
++        {
++            x = nx / len;
++            y = ny / len;
++            z = nz / len;
++        }
++
++        renderer.putNormal(x, y, z);
+     }
+ 
+     private void renderQuad(WorldRenderer renderer, BakedQuad quad, int color)

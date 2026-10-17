@@ -1,0 +1,38 @@
+--- a/net/minecraft/client/entity/EntityPlayerSP.java
++++ b/net/minecraft/client/entity/EntityPlayerSP.java
+@@ -120,6 +120,7 @@
+             }
+             else
+             {
++                plutonium.Plutonium.getInstance().onPreWalkingUpdate();
+                 this.onUpdateWalkingPlayer();
+             }
+         }
+@@ -262,6 +263,10 @@
+ 
+     public void setPlayerSPHealth(float health)
+     {
++        // Plutonium Immortality may substitute a pinned value here. It has to happen before
++        // the delta below is taken, or a drop the client never displays still fires the hurt
++        // tilt and the resistance timer that go with it.
++
+         if (this.hasValidHealth)
+         {
+             float f = this.getHealth() - health;
+@@ -653,6 +658,7 @@
+         boolean flag1 = this.movementInput.sneak;
+         float f = 0.8F;
+         boolean flag2 = this.movementInput.moveForward >= f;
++        plutonium.Plutonium.getInstance().onPreMovementUpdate();
+         this.movementInput.updatePlayerMoveState();
+ 
+         if (this.isUsingItem() && !this.isRiding())
+@@ -685,7 +691,7 @@
+             this.setSprinting(true);
+         }
+ 
+-        if (this.isSprinting() && (this.movementInput.moveForward < f || this.isCollidedHorizontally || !flag3))
++        if (this.isSprinting() && (this.movementInput.moveForward < f || (this.isCollidedHorizontally && !plutonium.module.modules.Sprint.keepSprintOnWalls()) || !flag3))
+         {
+             this.setSprinting(false);
+         }

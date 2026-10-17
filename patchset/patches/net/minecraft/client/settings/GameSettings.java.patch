@@ -1,0 +1,55 @@
+--- a/net/minecraft/client/settings/GameSettings.java
++++ b/net/minecraft/client/settings/GameSettings.java
+@@ -29,9 +29,9 @@
+ import org.apache.commons.lang3.ArrayUtils;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+-import org.lwjgl.input.Keyboard;
+-import org.lwjgl.input.Mouse;
+-import org.lwjgl.opengl.Display;
++import plutonium.gpu.KeyboardShim;
++import plutonium.gpu.MouseShim;
++import plutonium.gpu.WindowManager;
+ 
+ public class GameSettings
+ {
+@@ -138,6 +138,7 @@
+     public KeyBinding keyBindStreamToggleMic = new KeyBinding("key.streamToggleMic", 0, "key.categories.stream");
+     public KeyBinding[] keyBindsHotbar = new KeyBinding[] {new KeyBinding("key.hotbar.1", 2, "key.categories.inventory"), new KeyBinding("key.hotbar.2", 3, "key.categories.inventory"), new KeyBinding("key.hotbar.3", 4, "key.categories.inventory"), new KeyBinding("key.hotbar.4", 5, "key.categories.inventory"), new KeyBinding("key.hotbar.5", 6, "key.categories.inventory"), new KeyBinding("key.hotbar.6", 7, "key.categories.inventory"), new KeyBinding("key.hotbar.7", 8, "key.categories.inventory"), new KeyBinding("key.hotbar.8", 9, "key.categories.inventory"), new KeyBinding("key.hotbar.9", 10, "key.categories.inventory")};
+     public KeyBinding[] keyBindings;
++    public KeyBinding keyBindClickGUI = new KeyBinding("key.plutonium.clickgui", 54, "key.categories.misc"); // 54 = RSHIFT
+     protected Minecraft mc;
+     private File optionsFile;
+     public EnumDifficulty difficulty;
+@@ -160,6 +161,7 @@
+     public GameSettings(Minecraft mcIn, File p_i46326_2_)
+     {
+         this.keyBindings = (KeyBinding[])ArrayUtils.addAll(new KeyBinding[] {this.keyBindAttack, this.keyBindUseItem, this.keyBindForward, this.keyBindLeft, this.keyBindBack, this.keyBindRight, this.keyBindJump, this.keyBindSneak, this.keyBindSprint, this.keyBindDrop, this.keyBindInventory, this.keyBindChat, this.keyBindPlayerList, this.keyBindPickBlock, this.keyBindCommand, this.keyBindScreenshot, this.keyBindTogglePerspective, this.keyBindSmoothCamera, this.keyBindStreamStartStop, this.keyBindStreamPauseUnpause, this.keyBindStreamCommercials, this.keyBindStreamToggleMic, this.keyBindFullscreen, this.keyBindSpectatorOutlines}, this.keyBindsHotbar);
++        this.keyBindings = (KeyBinding[])((KeyBinding[])ArrayUtils.add(this.keyBindings, this.keyBindClickGUI));
+         this.difficulty = EnumDifficulty.NORMAL;
+         this.lastServer = "";
+         this.fovSetting = 70.0F;
+@@ -193,12 +195,12 @@
+ 
+     public static String getKeyDisplayString(int p_74298_0_)
+     {
+-        return p_74298_0_ < 0 ? I18n.format("key.mouseButton", new Object[] {Integer.valueOf(p_74298_0_ + 101)}): (p_74298_0_ < 256 ? Keyboard.getKeyName(p_74298_0_) : String.format("%c", new Object[] {Character.valueOf((char)(p_74298_0_ - 256))}).toUpperCase());
++        return p_74298_0_ < 0 ? I18n.format("key.mouseButton", new Object[] {Integer.valueOf(p_74298_0_ + 101)}): (p_74298_0_ < 256 ? KeyboardShim.getKeyName(p_74298_0_) : String.format("%c", new Object[] {Character.valueOf((char)(p_74298_0_ - 256))}).toUpperCase());
+     }
+ 
+     public static boolean isKeyDown(KeyBinding p_100015_0_)
+     {
+-        return p_100015_0_.getKeyCode() == 0 ? false : (p_100015_0_.getKeyCode() < 0 ? Mouse.isButtonDown(p_100015_0_.getKeyCode() + 100) : Keyboard.isKeyDown(p_100015_0_.getKeyCode()));
++        return p_100015_0_.getKeyCode() == 0 ? false : (p_100015_0_.getKeyCode() < 0 ? MouseShim.isButtonDown(p_100015_0_.getKeyCode() + 100) : KeyboardShim.isKeyDown(p_100015_0_.getKeyCode()));
+     }
+ 
+     public void setOptionKeyBinding(KeyBinding p_151440_1_, int p_151440_2_)
+@@ -437,7 +439,7 @@
+         if (p_74306_1_ == GameSettings.Options.ENABLE_VSYNC)
+         {
+             this.enableVsync = !this.enableVsync;
+-            Display.setVSyncEnabled(this.enableVsync);
++            WindowManager.setVSyncEnabled(this.enableVsync);
+         }
+ 
+         if (p_74306_1_ == GameSettings.Options.USE_VBO)

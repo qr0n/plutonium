@@ -1,0 +1,79 @@
+--- a/net/minecraft/client/gui/inventory/GuiContainer.java
++++ b/net/minecraft/client/gui/inventory/GuiContainer.java
+@@ -17,7 +17,7 @@
+ import net.minecraft.util.EnumChatFormatting;
+ import net.minecraft.util.MathHelper;
+ import net.minecraft.util.ResourceLocation;
+-import org.lwjgl.input.Keyboard;
++import plutonium.gpu.KeyboardShim;
+ 
+ public abstract class GuiContainer extends GuiScreen
+ {
+@@ -366,7 +366,7 @@
+                         }
+                         else
+                         {
+-                            boolean flag2 = l != -999 && (Keyboard.isKeyDown(42) || Keyboard.isKeyDown(54));
++                            boolean flag2 = l != -999 && (KeyboardShim.isKeyDown(42) || KeyboardShim.isKeyDown(54));
+                             int i1 = 0;
+ 
+                             if (flag2)
+@@ -577,7 +577,7 @@
+                 }
+                 else
+                 {
+-                    boolean flag1 = k != -999 && (Keyboard.isKeyDown(42) || Keyboard.isKeyDown(54));
++                    boolean flag1 = k != -999 && (KeyboardShim.isKeyDown(42) || KeyboardShim.isKeyDown(54));
+ 
+                     if (flag1)
+                     {
+@@ -618,9 +618,32 @@
+             slotId = slotIn.slotNumber;
+         }
+ 
++        if (!plutonium.module.modules.DropFilter.allowDrop(this.getThrownStack(slotIn, slotId, clickType)))
++        {
++            return;
++        }
++
+         this.mc.playerController.windowClick(this.inventorySlots.windowId, slotId, clickedButton, clickType, this.mc.thePlayer);
+     }
+ 
++    /** The stack this click would throw on the ground, or null when it isn't a drop. */
++    protected ItemStack getThrownStack(Slot slotIn, int slotId, int clickType)
++    {
++        if (clickType == 4)
++        {
++            // Drop key over a slot; with no slot it is the cursor stack that goes out
++            return slotIn != null ? slotIn.getStack() : this.mc.thePlayer.inventory.getItemStack();
++        }
++
++        if (slotId == -999 && (clickType == 0 || clickType == 1))
++        {
++            // Click/release outside the window throws whatever is on the cursor
++            return this.mc.thePlayer.inventory.getItemStack();
++        }
++
++        return null;
++    }
++
+     protected void keyTyped(char typedChar, int keyCode) throws IOException
+     {
+         if (keyCode == 1 || keyCode == this.mc.gameSettings.keyBindInventory.getKeyCode())
+@@ -638,7 +661,15 @@
+             }
+             else if (keyCode == this.mc.gameSettings.keyBindDrop.getKeyCode())
+             {
+-                this.handleMouseClick(this.theSlot, this.theSlot.slotNumber, isCtrlKeyDown() ? 1 : 0, 4);
++                if (plutonium.module.modules.DropToShiftClick.isActive())
++                {
++                    // Q over a filled slot -> quick-move (shift-click) instead of drop
++                    this.handleMouseClick(this.theSlot, this.theSlot.slotNumber, 0, 1);
++                }
++                else
++                {
++                    this.handleMouseClick(this.theSlot, this.theSlot.slotNumber, isCtrlKeyDown() ? 1 : 0, 4);
++                }
+             }
+         }
+     }
